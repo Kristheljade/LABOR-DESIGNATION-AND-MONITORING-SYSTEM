@@ -53,12 +53,83 @@
         "reassignedTask",
         "createdAt"
       ]
+    },
+    "labor_code": {
+      "title": "LaborCode",
+      "description": "A labor code to labor name mapping entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique labor code identifier."
+        },
+        "code": {
+          "type": "string",
+          "description": "The labor code itself."
+        },
+        "name": {
+          "type": "string",
+          "description": "The labor name associated with the code."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "The timestamp when this mapping was created."
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "name",
+        "createdAt"
+      ]
+    },
+    "project_code": {
+      "title": "ProjectCode",
+      "description": "A project code mapping entry containing name and site location.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique project code identifier."
+        },
+        "code": {
+          "type": "string",
+          "description": "The project code itself."
+        },
+        "name": {
+          "type": "string",
+          "description": "The project name associated with the code."
+        },
+        "location": {
+          "type": "string",
+          "description": "The site location associated with the project."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "The timestamp when this mapping was created."
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "name",
+        "location",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
     "/submissions/{id}": {
       "schema": "submission",
       "description": "A collection of individual external subcontracted labor designation entries."
+    },
+    "/labor_codes/{id}": {
+      "schema": "labor_code",
+      "description": "A collection of labor codes and names."
+    },
+    "/project_codes/{id}": {
+      "schema": "project_code",
+      "description": "A collection of project codes, names, and site locations."
     }
   }
 }

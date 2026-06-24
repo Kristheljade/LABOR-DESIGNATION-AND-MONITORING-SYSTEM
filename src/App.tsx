@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Lock, 
   Unlock, 
@@ -23,7 +23,9 @@ import {
   Database,
   FileText,
   Key,
-  Palette
+  Palette,
+  Briefcase,
+  UserCheck
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -124,13 +126,213 @@ const safeStorage = {
 // Suggested fields to accelerate field logging without repetitive typing
 const COMMON_PROJECTS = ["HASSAN VILLA PROJECT", "MOSQUE PROJECT", "PROPOSED RESIDENTIAL BUILDING",];
 const COMMON_LOCATIONS = ["AL WARQA'A 1ST", "AL YALAYIS 5TH", "AL BARSHA 2ND", "AL JADAF"];
-const COMMON_ENGINEERS = ["ENGR. SHAMJAS", "ENGR. DAWIT", "ENGR. JONAS", "ENGR. ALI"];
+const COMMON_ENGINEERS = ["ENGR. SHAMJAS", "ENGR. DAWIT", "ENGR. YONAS", "ENGR. ALI"];
 const DESIGNATIONS = ["CARPENTER", "HELPER", "STEEL FIXER", "MASON", "FOREMAN", "ELECTRICIAN", "PLUMBER", "TILE FIXER"];
 const COMMON_TASKS = ["HOUSEKEEPING", "STEEL FIXER", "CONCRETING", "EXCAVATION", "WALL MASONRY", "SCAFFOLDING", "CLEANING"];
+
+// Beautiful, robust custom Searchable Dropdown with keyboard-friendly instant code/text matching
+interface SearchableDropdownProps {
+  id: string;
+  label: string;
+  icon: React.ReactNode;
+  placeholder: string;
+  options: { value: string; label: string; sublabel?: string; data?: any }[];
+  value: string;
+  onChange: (value: string, data?: any) => void;
+  required?: boolean;
+  readOnly?: boolean;
+  disabled?: boolean;
+  allowCustom?: boolean;
+  containerId?: string;
+}
+
+const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
+  id,
+  label,
+  icon,
+  placeholder,
+  options,
+  value,
+  onChange,
+  required = false,
+  readOnly = false,
+  disabled = false,
+  allowCustom = false,
+  containerId,
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Sync searchTerm with the external value directly (no description appending for cleaner typing and backspacing)
+  useEffect(() => {
+    setSearchTerm(value);
+  }, [value]);
+
+  // Click outside to close
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        // On blur, if custom is NOT allowed, reset search term to matched value
+        if (!allowCustom) {
+          const option = options.find((o) => o.value.toUpperCase() === value.toUpperCase());
+          if (option) {
+            setSearchTerm(option.value);
+          } else {
+            setSearchTerm("");
+          }
+        }
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen, value, options, allowCustom]);
+
+  // Filter options
+  const filtered = options.filter((o) => {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return true;
+    // If the search term exactly equals the current state value, show all options on focus/click so they don't get restricted
+    if (term === value.toLowerCase().trim()) return true;
+    return (
+      o.value.toLowerCase().includes(term) ||
+      o.label.toLowerCase().includes(term) ||
+      (o.sublabel && o.sublabel.toLowerCase().includes(term))
+    );
+  });
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (readOnly || disabled) return;
+    const val = e.target.value;
+    setSearchTerm(val);
+    setIsOpen(true);
+
+    if (allowCustom) {
+      onChange(val);
+    } else {
+      // If they type a exact match to a code or label, select it immediately
+      const exactMatch = options.find(
+        (o) => o.value.toUpperCase() === val.toUpperCase().trim() || o.label.toUpperCase() === val.toUpperCase().trim()
+      );
+      if (exactMatch) {
+        onChange(exactMatch.value, exactMatch.data);
+      } else {
+        onChange("");
+      }
+    }
+  };
+
+  const handleSelectOption = (opt: { value: string; label: string; data?: any }) => {
+    onChange(opt.value, opt.data);
+    setSearchTerm(opt.value);
+    setIsOpen(false);
+  };
+
+  const handleInputFocus = () => {
+    if (readOnly || disabled) return;
+    setIsOpen(true);
+  };
+
+  // Find if there is a match to display its description beautifully
+  const matchedOpt = options.find((o) => o.value.toUpperCase() === value.toUpperCase());
+  const showLabelDescription = matchedOpt && matchedOpt.label !== matchedOpt.value;
+
+  return (
+    <div id={containerId} className="flex flex-col relative" ref={containerRef}>
+      <div className="flex justify-between items-center mb-1.5">
+        <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
+          {icon} {label}
+        </label>
+        {showLabelDescription && (
+          <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md max-w-[200px] truncate uppercase font-sans">
+            {matchedOpt.label}
+          </span>
+        )}
+      </div>
+      <div className="relative">
+        <input
+          id={id}
+          type="text"
+          placeholder={placeholder}
+          required={required}
+          readOnly={readOnly}
+          disabled={disabled}
+          value={searchTerm}
+
+          onChange={handleInputChange}
+          onFocus={handleInputFocus}
+          autoComplete="off"
+          className={`w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-3.5 pr-10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all ${
+            disabled ? "cursor-not-allowed opacity-50" : "cursor-text"
+          } ${readOnly ? "bg-slate-100 text-slate-500 cursor-not-allowed" : ""}`}
+        />
+        {!readOnly && !disabled && (
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+          >
+            <svg
+              className={`h-4 w-4 transform transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {isOpen && !readOnly && !disabled && (
+        <div className="absolute z-50 w-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto font-sans text-sm animate-fadeIn">
+          {filtered.length > 0 ? (
+            <div className="py-1">
+              {filtered.map((opt) => {
+                const isSelected = opt.value.toUpperCase() === value.toUpperCase();
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => handleSelectOption(opt)}
+                    className={`w-full text-left px-4 py-2 hover:bg-slate-50 transition-colors flex flex-col gap-0.5 ${
+                      isSelected ? "bg-slate-50 text-slate-900 font-bold" : "text-slate-700"
+                    }`}
+                  >
+                    <span className="font-mono text-xs font-bold text-slate-900">
+                      {opt.value} {opt.label !== opt.value ? `- ${opt.label}` : ""}
+                    </span>
+                    {opt.sublabel && (
+                      <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider flex items-center gap-1">
+                        <MapPin className="h-2.5 w-2.5" /> {opt.sublabel}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="px-4 py-3 text-xs text-slate-400 text-center font-medium">
+              {allowCustom ? (
+                <span className="font-mono text-slate-500">
+                  Press enter or leave to use custom: <strong className="text-slate-900">"{searchTerm}"</strong>
+                </span>
+              ) : (
+                "No matches found"
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function App() {
   // Navigation & authentication state
   const [currentView, setCurrentView] = useState<"form" | "admin">("form");
+  const [adminTab, setAdminTab] = useState<"ledger" | "labor_codes">("ledger");
   const [passcode, setPasscode] = useState<string>("");
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string>("");
@@ -147,6 +349,7 @@ export default function App() {
     reassignedTask: "",
     customDesignation: "",
     customReassignedTask: "",
+    laborCode: "",
   });
 
   // Submission UX state
@@ -159,11 +362,78 @@ export default function App() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
   const [logsError, setLogsError] = useState<string>("");
+
+  // Labor Codes system state
+  const [laborCodes, setLaborCodes] = useState<any[]>([]);
+  const [isLoadingLaborCodes, setIsLoadingLaborCodes] = useState<boolean>(false);
+  const [laborCodesError, setLaborCodesError] = useState<string>("");
+  const [matchedLaborName, setMatchedLaborName] = useState<string>("");
+
+  // New labor code inputs
+  const [newLaborCode, setNewLaborCode] = useState("");
+  const [newLaborName, setNewLaborName] = useState("");
+  const [isSavingLaborCode, setIsSavingLaborCode] = useState(false);
+  const [saveLaborCodeError, setSaveLaborCodeError] = useState("");
+  const [laborCodeSearch, setLaborCodeSearch] = useState("");
+
+  // Project Codes system state
+  const [projectCodes, setProjectCodes] = useState<any[]>([]);
+  const [isLoadingProjectCodes, setIsLoadingProjectCodes] = useState<boolean>(false);
+  const [projectCodesError, setProjectCodesError] = useState<string>("");
+
+  // New project code inputs
+  const [newProjectCode, setNewProjectCode] = useState("");
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectLocation, setNewProjectLocation] = useState("");
+  const [isSavingProjectCode, setIsSavingProjectCode] = useState(false);
+  const [saveProjectCodeError, setSaveProjectCodeError] = useState("");
+  const [projectCodeSearch, setProjectCodeSearch] = useState("");
+  const [laborCodesSubTab, setLaborCodesSubTab] = useState<"labor_codes" | "project_codes">("labor_codes");
   
   // Table search and filters
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("ALL");
   const [selectedDesignationFilter, setSelectedDesignationFilter] = useState<string>("ALL");
+
+  // Custom dialog and notification states to bypass sandboxed iframe issues with confirm/alert
+  const [confirmState, setConfirmState] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    onConfirm: () => void | Promise<void>;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    confirmText: "Delete",
+    onConfirm: () => {},
+  });
+
+  const [notificationState, setNotificationState] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: "success" | "error" | "info";
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showNotification = (title: string, message: string, type: "success" | "error" | "info" = "info") => {
+    setNotificationState({ isOpen: true, title, message, type });
+    // Auto close after 4 seconds
+    setTimeout(() => {
+      setNotificationState(prev => {
+        if (prev.title === title && prev.message === message) {
+          return { ...prev, isOpen: false };
+        }
+        return prev;
+      });
+    }, 4000);
+  };
 
   // Logo background style customization
   const [logoBg, setLogoBg] = useState<string>(() => {
@@ -175,20 +445,262 @@ export default function App() {
     safeStorage.setItem("binlahej_logo_bg", bgKey);
   };
 
+  const fetchLaborCodes = async () => {
+    setIsLoadingLaborCodes(true);
+    setLaborCodesError("");
+    try {
+      const res = await fetch("/api/labor-codes");
+      if (res.ok) {
+        const data = await res.json();
+        setLaborCodes(data);
+      } else {
+        setLaborCodesError("Failed to fetch labor codes from database.");
+      }
+    } catch (err) {
+      setLaborCodesError("Error connecting to database server.");
+    } finally {
+      setIsLoadingLaborCodes(false);
+    }
+  };
+
+  const fetchProjectCodes = async () => {
+    setIsLoadingProjectCodes(true);
+    setProjectCodesError("");
+    try {
+      const res = await fetch("/api/project-codes");
+      if (res.ok) {
+        const data = await res.json();
+        setProjectCodes(data);
+      } else {
+        setProjectCodesError("Failed to fetch project codes from database.");
+      }
+    } catch (err) {
+      setProjectCodesError("Error connecting to database server.");
+    } finally {
+      setIsLoadingProjectCodes(false);
+    }
+  };
+
   // Load existing passcode from cache on startup
   useEffect(() => {
     const savedCode = safeStorage.getItem("binlahej_passcode");
     if (savedCode) {
       verifyStoredPasscode(savedCode);
     }
+    fetchLaborCodes();
+    fetchProjectCodes();
   }, []);
 
   // Fetch admin logs whenever admin view is active or authenticated
   useEffect(() => {
     if (isAuthenticated || currentView === "admin") {
       fetchSubmissions();
+      fetchLaborCodes();
+      fetchProjectCodes();
     }
   }, [isAuthenticated, currentView]);
+
+  const handleLaborCodeChange = (codeVal: string) => {
+    const upperCode = codeVal.toUpperCase();
+    setFormData(prev => ({ ...prev, laborCode: upperCode }));
+    
+    // Find matching labor code
+    const matched = laborCodes.find(lc => lc.code.toUpperCase() === upperCode.trim());
+    if (matched) {
+      setMatchedLaborName(matched.name);
+      setFormData(prev => ({ ...prev, laborsName: matched.name }));
+    } else {
+      setMatchedLaborName("");
+    }
+  };
+
+  const handleProjectCodeChange = (codeVal: string) => {
+    const upperCode = codeVal.toUpperCase();
+    
+    // Find matching project code
+    const matched = projectCodes.find(pc => pc.code.toUpperCase() === upperCode.trim());
+    if (matched) {
+      setFormData(prev => ({ 
+        ...prev, 
+        project: upperCode,
+        projectLocation: matched.location
+      }));
+    } else {
+      setFormData(prev => ({ 
+        ...prev, 
+        project: upperCode,
+        projectLocation: ""
+      }));
+    }
+  };
+
+  const handleDesignationChange = (val: string) => {
+    const upperVal = val.toUpperCase().trim();
+    if (DESIGNATIONS.includes(upperVal)) {
+      setFormData(prev => ({ ...prev, designation: upperVal, customDesignation: "" }));
+    } else if (val === "") {
+      setFormData(prev => ({ ...prev, designation: "", customDesignation: "" }));
+    } else {
+      setFormData(prev => ({ ...prev, designation: "OTHER", customDesignation: val }));
+    }
+  };
+
+  const handleTaskChange = (val: string) => {
+    const upperVal = val.toUpperCase().trim();
+    if (COMMON_TASKS.includes(upperVal)) {
+      setFormData(prev => ({ ...prev, reassignedTask: upperVal, customReassignedTask: "" }));
+    } else if (val === "") {
+      setFormData(prev => ({ ...prev, reassignedTask: "", customReassignedTask: "" }));
+    } else {
+      setFormData(prev => ({ ...prev, reassignedTask: "OTHER", customReassignedTask: val }));
+    }
+  };
+
+  const handleSaveLaborCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLaborCode.trim() || !newLaborName.trim()) {
+      setSaveLaborCodeError("Please fill in both fields.");
+      return;
+    }
+
+    setIsSavingLaborCode(true);
+    setSaveLaborCodeError("");
+
+    try {
+      const res = await fetch("/api/labor-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: newLaborCode.trim().toUpperCase(),
+          name: newLaborName.trim().toUpperCase(),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setLaborCodes(prev => {
+          const filtered = prev.filter(c => c.id !== data.entry.id && c.code !== data.entry.code);
+          return [...filtered, data.entry];
+        });
+        setNewLaborCode("");
+        setNewLaborName("");
+      } else {
+        const errorData = await res.json();
+        setSaveLaborCodeError(errorData.error || "Failed to save code mapping.");
+      }
+    } catch (err) {
+      setSaveLaborCodeError("Network error. Could not connect to database.");
+    } finally {
+      setIsSavingLaborCode(false);
+    }
+  };
+
+  const handleSaveProjectCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProjectCode.trim() || !newProjectName.trim() || !newProjectLocation.trim()) {
+      setSaveProjectCodeError("Please fill in all three fields.");
+      return;
+    }
+
+    setIsSavingProjectCode(true);
+    setSaveProjectCodeError("");
+
+    try {
+      const res = await fetch("/api/project-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: newProjectCode.trim().toUpperCase(),
+          name: newProjectName.trim().toUpperCase(),
+          location: newProjectLocation.trim().toUpperCase(),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setProjectCodes(prev => {
+          const filtered = prev.filter(c => c.id !== data.entry.id && c.code !== data.entry.code);
+          return [...filtered, data.entry];
+        });
+        setNewProjectCode("");
+        setNewProjectName("");
+        setNewProjectLocation("");
+        showNotification("Success", "Project code mapping saved successfully.", "success");
+      } else {
+        const errorData = await res.json();
+        setSaveProjectCodeError(errorData.error || "Failed to save project code mapping.");
+      }
+    } catch (err) {
+      setSaveProjectCodeError("Network error. Could not connect to database.");
+    } finally {
+      setIsSavingProjectCode(false);
+    }
+  };
+
+  const handleDeleteProjectCode = (id: string, code: string) => {
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Project Code Mapping",
+      message: `Are you sure you want to delete the mapping for project code ${code}? This cannot be undone.`,
+      confirmText: "Yes, Delete",
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/project-codes/${id}`, {
+            method: "DELETE"
+          });
+          if (res.ok) {
+            setProjectCodes(prev => prev.filter(c => c.id !== id));
+            showNotification("Success", `Project code ${code} mapping deleted successfully.`, "success");
+          } else {
+            showNotification("Error", "Failed to delete project code mapping.", "error");
+          }
+        } catch (error) {
+          showNotification("Error", "Network error while deleting project code mapping.", "error");
+        }
+      }
+    });
+  };
+
+  const handleDeleteLaborCode = (id: string, code: string) => {
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Code Mapping",
+      message: `Are you sure you want to delete the mapping for labor code ${code}? This cannot be undone.`,
+      confirmText: "Yes, Delete",
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/labor-codes/${id}`, {
+            method: "DELETE",
+          });
+
+          if (res.ok) {
+            setLaborCodes(prev => prev.filter(c => c.id !== id));
+            showNotification("Success", `Labor code ${code} mapping deleted successfully.`, "success");
+          } else {
+            showNotification("Error", "Failed to delete code mapping.", "error");
+          }
+        } catch (err) {
+          showNotification("Network Error", "Could not connect to the database.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  const filteredLaborCodes = laborCodes.filter(lc => {
+    const sTerm = laborCodeSearch.toLowerCase();
+    return lc.code.toLowerCase().includes(sTerm) || lc.name.toLowerCase().includes(sTerm);
+  });
+
+  const filteredProjectCodes = projectCodes.filter(pc => {
+    const sTerm = projectCodeSearch.toLowerCase();
+    return (
+      pc.code.toLowerCase().includes(sTerm) ||
+      pc.name.toLowerCase().includes(sTerm) ||
+      pc.location.toLowerCase().includes(sTerm)
+    );
+  });
 
   // Handle password submission and save token to browser cache
   const verifyStoredPasscode = async (code: string) => {
@@ -333,7 +845,9 @@ export default function App() {
           laborsName: "",
           customDesignation: "",
           customReassignedTask: "",
+          laborCode: "",
         }));
+        setMatchedLaborName("");
       } else {
         const errorData = await res.json();
         setSubmitError(errorData.error || "Failed to submit entry. Please try again.");
@@ -365,24 +879,31 @@ export default function App() {
     }
   };
 
-  const handleDeleteItem = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete the record for ${name}?`)) {
-      return;
-    }
+  const handleDeleteItem = (id: string, name: string) => {
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Ledger Record",
+      message: `Are you sure you want to permanently delete the log entry for ${name}? This action cannot be undone.`,
+      confirmText: "Yes, Delete",
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/submissions/${id}`, {
+            method: "DELETE",
+          });
 
-    try {
-      const res = await fetch(`/api/submissions/${id}`, {
-        method: "DELETE",
-      });
-
-      if (res.ok) {
-        setSubmissions(prev => prev.filter((s) => s.id !== id));
-      } else {
-        alert("Delete operation failed. Please refresh and try again.");
+          if (res.ok) {
+            setSubmissions(prev => prev.filter((s) => s.id !== id));
+            showNotification("Success", "Record deleted successfully.", "success");
+          } else {
+            showNotification("Error", "Delete operation failed. Please refresh and try again.", "error");
+          }
+        } catch (err) {
+          showNotification("Network Error", "Could not connect to the database server.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
       }
-    } catch (err) {
-      alert("Error contacting database server.");
-    }
+    });
   };
 
   // Excel UTF-8 safe CSV Downloader
@@ -704,13 +1225,6 @@ export default function App() {
                     >
                       Log Another Labor Record
                     </button>
-                    <button
-                      id="form-go-admin-btn"
-                      onClick={() => setCurrentView("admin")}
-                      className="inline-flex items-center justify-center px-6 py-3 border border-slate-200 text-sm font-semibold rounded-lg text-slate-800 bg-white hover:bg-slate-50 cursor-pointer transition-all duration-200"
-                    >
-                      Go to Admin Database
-                    </button>
                   </div>
                 </div>
               ) : (
@@ -747,33 +1261,26 @@ export default function App() {
                       </div>
 
                       {/* PROJECT */}
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
-                          Project Designation
-                        </label>
-                        <input
-                          id="input-project"
-                          type="text"
-                          required
-                          placeholder="e.g. HASSAN VILLA PROJECT"
-                          value={formData.project}
-                          onChange={(e) => setFormData(prev => ({ ...prev, project: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 uppercase placeholder:normal-case transition-all"
-                        />
-                        {/* Quick tags */}
-                        <div className="flex flex-wrap gap-1 mt-2.5">
-                          {COMMON_PROJECTS.map((proj) => (
-                            <button
-                              key={proj}
-                              type="button"
-                              onClick={() => quickSetField("project", proj)}
-                              className="text-[10px] bg-slate-50 hover:bg-slate-100 text-slate-500 py-1 px-2.5 rounded-lg font-medium border border-slate-200/60 focus:outline-none cursor-pointer transition-colors"
-                            >
-                              + {proj}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                      <SearchableDropdown
+                        id="select-project"
+                        label="Project Code"
+                        icon={<Briefcase className="h-3.5 w-3.5 text-slate-400" />}
+                        placeholder="Search or enter Project Code..."
+                        options={(projectCodes.length > 0 ? projectCodes : [
+                          { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
+                          { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
+                          { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
+                        ]).map(pc => ({
+                          value: pc.code,
+                          label: pc.name,
+                          sublabel: pc.location
+                        }))}
+                        value={formData.project}
+                        onChange={(val) => handleProjectCodeChange(val)}
+                        required
+                        allowCustom
+                        containerId="select-project-container"
+                      />
 
                       {/* PROJECT LOCATION */}
                       <div className="flex flex-col">
@@ -783,59 +1290,87 @@ export default function App() {
                         <input
                           id="input-location"
                           type="text"
-                          required
-                          placeholder="e.g. AL WARQA'A 1ST"
+                          placeholder={(projectCodes.length > 0 ? projectCodes : [
+                            { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
+                            { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
+                            { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
+                          ]).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim()) ? "Auto-filled from Project Code" : "Enter Site Location..."}
                           value={formData.projectLocation}
                           onChange={(e) => setFormData(prev => ({ ...prev, projectLocation: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 uppercase placeholder:normal-case transition-all"
+                          readOnly={(projectCodes.length > 0 ? projectCodes : [
+                            { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
+                            { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
+                            { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
+                          ]).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())}
+                          className={`w-full border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none text-sm font-semibold transition-all uppercase ${
+                            (projectCodes.length > 0 ? projectCodes : [
+                              { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
+                              { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
+                              { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
+                            ]).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())
+                              ? "bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200" 
+                              : "bg-slate-50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
+                          }`}
                         />
-                        <div className="flex flex-wrap gap-1 mt-2.5">
-                          {COMMON_LOCATIONS.map((loc) => (
-                            <button
-                              key={loc}
-                              type="button"
-                              onClick={() => quickSetField("projectLocation", loc)}
-                              className="text-[10px] bg-slate-50 hover:bg-slate-100 text-slate-500 py-1 px-2.5 rounded-lg font-medium border border-slate-200/60 focus:outline-none cursor-pointer transition-colors"
-                            >
-                              + {loc}
-                            </button>
-                          ))}
-                        </div>
                       </div>
 
                       {/* SITE ENGINEER */}
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
-                          Assigned Site Engineer
-                        </label>
-                        <input
-                          id="input-engineer"
-                          type="text"
-                          required
-                          placeholder="e.g. ENGR. DAWIT"
-                          value={formData.siteEngineer}
-                          onChange={(e) => setFormData(prev => ({ ...prev, siteEngineer: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 uppercase placeholder:normal-case transition-all"
-                        />
-                        <div className="flex flex-wrap gap-1 mt-2.5">
-                          {COMMON_ENGINEERS.map((eng) => (
-                            <button
-                              key={eng}
-                              type="button"
-                              onClick={() => quickSetField("siteEngineer", eng)}
-                              className="text-[10px] bg-slate-50 hover:bg-slate-100 text-slate-500 py-1 px-2.5 rounded-lg font-medium border border-slate-200/60 focus:outline-none cursor-pointer transition-colors"
-                            >
-                              + {eng}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                      <SearchableDropdown
+                        id="select-engineer"
+                        label="Assigned Site Engineer"
+                        icon={<UserCheck className="h-3.5 w-3.5 text-slate-400" />}
+                        placeholder="Search or enter Site Engineer..."
+                        options={COMMON_ENGINEERS.map((eng) => ({
+                          value: eng,
+                          label: eng
+                        }))}
+                        value={formData.siteEngineer}
+                        onChange={(val) => setFormData(prev => ({ ...prev, siteEngineer: val }))}
+                        required
+                        allowCustom
+                        containerId="select-engineer-container"
+                      />
 
                     </div>
 
                     {/* RIGHT COLUMN */}
                     <div className="space-y-6">
                       
+                      {/* LABOR CODE */}
+                      <SearchableDropdown
+                        id="select-labor-code"
+                        label="Select Labor Code"
+                        icon={<Key className="h-3.5 w-3.5 text-slate-400" />}
+                        placeholder="Search or enter Labor Code..."
+                        options={(laborCodes.length > 0 ? laborCodes : [
+                          { code: "BL001", name: "MUHAMMAD RAMZAN" },
+                          { code: "BL002", name: "KARTAR SINGH" },
+                          { code: "BL003", name: "ALEXIS SÁNCHEZ" },
+                          { code: "BL004", name: "AHMED MANSUR" }
+                        ]).map(lc => ({
+                          value: lc.code,
+                          label: lc.name
+                        }))}
+                        value={formData.laborCode}
+                        onChange={(val) => handleLaborCodeChange(val)}
+                        required
+                        allowCustom
+                        containerId="select-labor-code-container"
+                      />
+                      {formData.laborCode && (
+                        <div className="mt-2 text-right">
+                          {matchedLaborName ? (
+                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold font-mono">
+                              ✓ {matchedLaborName} MATCHED
+                            </span>
+                          ) : (
+                            <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold font-mono">
+                              NO MATCH
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       {/* LABOR'S NAME */}
                       <div className="flex flex-col">
                         <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
@@ -844,73 +1379,51 @@ export default function App() {
                         <input
                           id="input-labors-name"
                           type="text"
-                          required
-                          placeholder="ENTER FULL NAME"
+                          placeholder={matchedLaborName ? "Auto-filled from Labor Code" : "Enter Labor's Full Name..."}
                           value={formData.laborsName}
                           onChange={(e) => setFormData(prev => ({ ...prev, laborsName: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 uppercase placeholder:normal-case transition-all"
+                          readOnly={!!matchedLaborName}
+                          className={`w-full border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none text-sm font-semibold transition-all uppercase ${
+                            matchedLaborName
+                              ? "bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200"
+                              : "bg-slate-50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
+                          }`}
                         />
                       </div>
 
                       {/* DESIGNATION */}
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
-                          <HardHat className="h-3.5 w-3.5 text-slate-400" /> Designation / Trade
-                        </label>
-                        <select
-                          id="select-designation"
-                          value={formData.designation}
-                          onChange={(e) => setFormData(prev => ({ ...prev, designation: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 transition-all cursor-pointer"
-                        >
-                          {DESIGNATIONS.map(role => (
-                            <option key={role} value={role}>{role}</option>
-                          ))}
-                          <option value="OTHER">OTHER (TYPE CUSTOM DESIGNATION...)</option>
-                        </select>
-                        
-                        {formData.designation === "OTHER" && (
-                          <input
-                            id="input-custom-designation"
-                            type="text"
-                            required
-                            placeholder="Type designation here..."
-                            value={formData.customDesignation}
-                            onChange={(e) => setFormData(prev => ({ ...prev, customDesignation: e.target.value }))}
-                            className="mt-2.5 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium uppercase placeholder:normal-case transition-all"
-                          />
-                        )}
-                      </div>
+                      <SearchableDropdown
+                        id="select-designation"
+                        label="Designation / Trade"
+                        icon={<HardHat className="h-3.5 w-3.5 text-slate-400" />}
+                        placeholder="Search or enter custom designation..."
+                        options={DESIGNATIONS.map(role => ({
+                          value: role,
+                          label: role
+                        }))}
+                        value={formData.designation === "OTHER" ? formData.customDesignation : formData.designation}
+                        onChange={(val) => handleDesignationChange(val)}
+                        required
+                        allowCustom
+                        containerId="select-designation-container"
+                      />
 
                       {/* REASSIGNED TASK */}
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
-                          <ClipboardCheck className="h-3.5 w-3.5 text-slate-400" /> Active Assigned Task
-                        </label>
-                        <select
-                          id="select-reassigned"
-                          value={formData.reassignedTask}
-                          onChange={(e) => setFormData(prev => ({ ...prev, reassignedTask: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 transition-all cursor-pointer"
-                        >
-                          {COMMON_TASKS.map(task => (
-                            <option key={task} value={task}>{task}</option>
-                          ))}
-                          <option value="OTHER">OTHER (TYPE CUSTOM REASSIGNED TASK...)</option>
-                        </select>
-
-                        {formData.reassignedTask === "OTHER" && (
-                          <input
-                            id="input-custom-task"
-                            type="text"
-                            required
-                            placeholder="Type reassigned task here..."
-                            value={formData.customReassignedTask}
-                            onChange={(e) => setFormData(prev => ({ ...prev, customReassignedTask: e.target.value }))}
-                            className="mt-2.5 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium uppercase placeholder:normal-case transition-all"
-                          />
-                        )}
-                      </div>
+                      <SearchableDropdown
+                        id="select-reassigned"
+                        label="Active Assigned Task"
+                        icon={<ClipboardCheck className="h-3.5 w-3.5 text-slate-400" />}
+                        placeholder="Search or enter custom task..."
+                        options={COMMON_TASKS.map(task => ({
+                          value: task,
+                          label: task
+                        }))}
+                        value={formData.reassignedTask === "OTHER" ? formData.customReassignedTask : formData.reassignedTask}
+                        onChange={(val) => handleTaskChange(val)}
+                        required
+                        allowCustom
+                        containerId="select-reassigned-container"
+                      />
 
                     </div>
 
@@ -947,8 +1460,35 @@ export default function App() {
         {currentView === "admin" && (
           <div id="admin-container" className="space-y-6">
             
+            {/* Elegant Sub-navigation for Console Views */}
+            <div className="flex border-b border-slate-200/80 mb-4 bg-white p-2 rounded-xl shadow-2xs">
+              <button
+                id="tab-ledger"
+                onClick={() => setAdminTab("ledger")}
+                className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                  adminTab === "ledger"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                }`}
+              >
+                <FileSpreadsheet className="h-4 w-4" /> Ledger Logs Database
+              </button>
+              <button
+                id="tab-labor-codes"
+                onClick={() => setAdminTab("labor_codes")}
+                className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                  adminTab === "labor_codes"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                }`}
+              >
+                <Key className="h-4 w-4" /> Manage Labor Codes System
+              </button>
+            </div>
+            
             {/* LOGS DASHBOARD ACTIVE VIEW */}
-            <div id="logs-dashboard" className="space-y-6">
+            {adminTab === "ledger" && (
+              <div id="logs-dashboard" className="space-y-6">
               
               {/* Admin Header Commands */}
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm">
@@ -1145,7 +1685,7 @@ export default function App() {
                         <thead className="bg-[#0F172A] text-slate-200 select-none text-[10px] uppercase font-mono tracking-wider border-b border-slate-800">
                           <tr>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">DATE</th>
-                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">PROJECT</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">PROJECT CODE</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">LABORS NAME</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">DESIGNATION</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">PROJECT LOCATION</th>
@@ -1304,6 +1844,385 @@ export default function App() {
 
                 </div>
               </div>
+            )}
+
+            {/* LABOR CODES & PROJECT CODES CONFIGURATION DASHBOARD */}
+            {adminTab === "labor_codes" && (
+              <div id="labor-codes-dashboard" className="space-y-6 animate-fadeIn">
+                
+                {/* Admin Header Commands */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-slate-50 text-slate-700 p-2.5 rounded-xl border border-slate-100">
+                      <Key className="h-5 w-5 text-slate-700" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight flex flex-wrap items-center gap-2">
+                        <span>Directory Mapping Control Console</span>
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-200 font-bold tracking-normal uppercase">
+                          ● Admin Database
+                        </span>
+                      </h2>
+                      <p className="text-xs text-slate-400 font-mono">
+                        Manage code dictionaries for automatic form autofill and validation
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                    <button
+                      id="refresh-codes-btn"
+                      onClick={async () => {
+                        await Promise.all([fetchLaborCodes(), fetchProjectCodes()]);
+                        showNotification("Refreshed", "Directories successfully synchronized with cloud database.", "success");
+                      }}
+                      disabled={isLoadingLaborCodes || isLoadingProjectCodes}
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${(isLoadingLaborCodes || isLoadingProjectCodes) ? "animate-spin" : ""}`} /> Refresh Live Data
+                    </button>
+
+                    <button
+                      id="close-console-btn"
+                      onClick={() => setCurrentView("form")}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                    >
+                      <LogOut className="h-4 w-4" /> Close Console
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-tabs selector for Labor vs Project mapping */}
+                <div className="flex border-b border-slate-200 bg-white p-2 rounded-2xl border border-slate-200/60 shadow-2xs gap-1">
+                  <button
+                    onClick={() => setLaborCodesSubTab("labor_codes")}
+                    className={`flex-1 py-3 px-4 rounded-xl text-center font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                      laborCodesSubTab === "labor_codes"
+                        ? "bg-slate-900 text-white shadow-xs"
+                        : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    Labor Codes Registry
+                  </button>
+                  <button
+                    onClick={() => setLaborCodesSubTab("project_codes")}
+                    className={`flex-1 py-3 px-4 rounded-xl text-center font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                      laborCodesSubTab === "project_codes"
+                        ? "bg-slate-900 text-white shadow-xs"
+                        : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    Project Codes Registry &amp; Locations
+                  </button>
+                </div>
+
+                {/* SUB-TAB 1: LABOR CODES */}
+                {laborCodesSubTab === "labor_codes" && (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+                    
+                    {/* Left Column: Input Form */}
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm space-y-4 h-fit">
+                      <h3 className="font-semibold text-slate-800 uppercase tracking-wider text-xs font-mono border-b border-slate-100 pb-2 flex items-center gap-1.5">
+                        <PlusCircle className="h-4 w-4 text-slate-500" /> Add Labor Mapping
+                      </h3>
+                      
+                      {saveLaborCodeError && (
+                        <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-2xs text-rose-700 flex items-start gap-1.5">
+                          <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
+                          <span>{saveLaborCodeError}</span>
+                        </div>
+                      )}
+
+                      <form onSubmit={handleSaveLaborCode} className="space-y-4">
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                            Labor Code
+                          </label>
+                          <input
+                            id="new-labor-code"
+                            type="text"
+                            required
+                            placeholder="e.g. BL005"
+                            value={newLaborCode}
+                            onChange={(e) => setNewLaborCode(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                          />
+                        </div>
+
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                            Labor's Full Name
+                          </label>
+                          <input
+                            id="new-labor-name"
+                            type="text"
+                            required
+                            placeholder="e.g. SANDEEP SINGH"
+                            value={newLaborName}
+                            onChange={(e) => setNewLaborName(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                          />
+                        </div>
+
+                        <button
+                          id="save-code-mapping-btn"
+                          type="submit"
+                          disabled={isSavingLaborCode}
+                          className="w-full inline-flex items-center justify-center py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase rounded-xl shadow-sm text-[10px] tracking-wider cursor-pointer disabled:opacity-50 transition-colors"
+                        >
+                          {isSavingLaborCode ? (
+                            <>
+                              <RefreshCw className="h-3 w-3 mr-1.5 animate-spin text-white" />
+                              SAVING...
+                            </>
+                          ) : (
+                            "SAVE LABOR MAPPING"
+                          )}
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Right Column: Code Mapping Ledger Table */}
+                    <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200/60 shadow-sm overflow-hidden flex flex-col">
+                      <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <FileSpreadsheet className="h-4.5 w-4.5 text-slate-500" />
+                          <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">Labor Mapping Ledger</span>
+                        </div>
+                        
+                        {/* Search code */}
+                        <div className="relative w-full sm:max-w-xs">
+                          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                          <input
+                            id="search-codes-input"
+                            type="text"
+                            placeholder="Search labor codes or names..."
+                            value={laborCodeSearch}
+                            onChange={(e) => setLaborCodeSearch(e.target.value)}
+                            className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-800 bg-white font-medium text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      {laborCodesError && (
+                        <div className="p-4 bg-rose-50 text-rose-700 text-xs border-b border-rose-100 flex items-center gap-2">
+                          <AlertCircle className="h-5 w-5 text-rose-500" />
+                          <span>{laborCodesError}</span>
+                        </div>
+                      )}
+
+                      {isLoadingLaborCodes ? (
+                        <div className="p-12 text-center text-slate-500">
+                          <RefreshCw className="h-8 w-8 animate-spin mx-auto text-slate-400 mb-2" />
+                          Loading mapped labor codes...
+                        </div>
+                      ) : filteredLaborCodes.length === 0 ? (
+                        <div className="p-12 text-center text-slate-400 font-medium text-xs">
+                          No mapped labor codes found.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto flex-1">
+                          <table id="labor-codes-table" className="w-full text-left border-collapse">
+                            <thead className="bg-[#0F172A] text-slate-200 select-none text-[10px] uppercase font-mono tracking-wider border-b border-slate-800">
+                              <tr>
+                                <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">LABOR CODE</th>
+                                <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">FULL NAME</th>
+                                <th className="py-2.5 px-4 font-bold text-center">ACTION</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 text-xs font-medium">
+                              {filteredLaborCodes.map((lc) => (
+                                <tr key={lc.id} className="hover:bg-slate-50 transition-colors duration-100 border-b border-slate-200">
+                                  <td className="py-2 px-4 text-[#e11d48] font-bold font-mono uppercase border-r border-slate-200 bg-indigo-50/5">
+                                    {lc.code}
+                                  </td>
+                                  <td className="py-2 px-4 text-slate-800 font-bold uppercase border-r border-slate-200">
+                                    {lc.name}
+                                  </td>
+                                  <td className="py-2 px-4 text-center">
+                                    <button
+                                      onClick={() => handleDeleteLaborCode(lc.id, lc.code)}
+                                      title="Delete Mapping"
+                                      className="p-1 px-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-800 border border-rose-200 rounded cursor-pointer transition-colors"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5 inline" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                )}
+
+                {/* SUB-TAB 2: PROJECT CODES */}
+                {laborCodesSubTab === "project_codes" && (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+                    
+                    {/* Left Column: Input Form */}
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm space-y-4 h-fit">
+                      <h3 className="font-semibold text-slate-800 uppercase tracking-wider text-xs font-mono border-b border-slate-100 pb-2 flex items-center gap-1.5">
+                        <PlusCircle className="h-4 w-4 text-slate-500" /> Add Project Mapping
+                      </h3>
+                      
+                      {saveProjectCodeError && (
+                        <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-2xs text-rose-700 flex items-start gap-1.5">
+                          <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
+                          <span>{saveProjectCodeError}</span>
+                        </div>
+                      )}
+
+                      <form onSubmit={handleSaveProjectCode} className="space-y-4">
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                            Project Code
+                          </label>
+                          <input
+                            id="new-project-code"
+                            type="text"
+                            required
+                            placeholder="e.g. P004"
+                            value={newProjectCode}
+                            onChange={(e) => setNewProjectCode(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                          />
+                        </div>
+
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                            Project Name
+                          </label>
+                          <input
+                            id="new-project-name"
+                            type="text"
+                            required
+                            placeholder="e.g. COMMERCIAL TOWER PROJECT"
+                            value={newProjectName}
+                            onChange={(e) => setNewProjectName(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                          />
+                        </div>
+
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                            Site Location
+                          </label>
+                          <input
+                            id="new-project-location"
+                            type="text"
+                            required
+                            placeholder="e.g. AL BARSHA 1ST"
+                            value={newProjectLocation}
+                            onChange={(e) => setNewProjectLocation(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                          />
+                        </div>
+
+                        <button
+                          id="save-project-mapping-btn"
+                          type="submit"
+                          disabled={isSavingProjectCode}
+                          className="w-full inline-flex items-center justify-center py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase rounded-xl shadow-sm text-[10px] tracking-wider cursor-pointer disabled:opacity-50 transition-colors"
+                        >
+                          {isSavingProjectCode ? (
+                            <>
+                              <RefreshCw className="h-3 w-3 mr-1.5 animate-spin text-white" />
+                              SAVING...
+                            </>
+                          ) : (
+                            "SAVE PROJECT MAPPING"
+                          )}
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Right Column: Project Mapping Ledger Table */}
+                    <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200/60 shadow-sm overflow-hidden flex flex-col">
+                      <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <FileSpreadsheet className="h-4.5 w-4.5 text-slate-500" />
+                          <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">Project Mapping Ledger</span>
+                        </div>
+                        
+                        {/* Search code */}
+                        <div className="relative w-full sm:max-w-xs">
+                          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                          <input
+                            id="search-projects-input"
+                            type="text"
+                            placeholder="Search projects or locations..."
+                            value={projectCodeSearch}
+                            onChange={(e) => setProjectCodeSearch(e.target.value)}
+                            className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-800 bg-white font-medium text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      {projectCodesError && (
+                        <div className="p-4 bg-rose-50 text-rose-700 text-xs border-b border-rose-100 flex items-center gap-2">
+                          <AlertCircle className="h-5 w-5 text-rose-500" />
+                          <span>{projectCodesError}</span>
+                        </div>
+                      )}
+
+                      {isLoadingProjectCodes ? (
+                        <div className="p-12 text-center text-slate-500">
+                          <RefreshCw className="h-8 w-8 animate-spin mx-auto text-slate-400 mb-2" />
+                          Loading mapped project codes...
+                        </div>
+                      ) : filteredProjectCodes.length === 0 ? (
+                        <div className="p-12 text-center text-slate-400 font-medium text-xs">
+                          No mapped project codes found.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto flex-1">
+                          <table id="project-codes-table" className="w-full text-left border-collapse">
+                            <thead className="bg-[#0F172A] text-slate-200 select-none text-[10px] uppercase font-mono tracking-wider border-b border-slate-800">
+                              <tr>
+                                <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">PROJECT CODE</th>
+                                <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">PROJECT NAME</th>
+                                <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">SITE LOCATION</th>
+                                <th className="py-2.5 px-4 font-bold text-center">ACTION</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 text-xs font-medium">
+                              {filteredProjectCodes.map((pc) => (
+                                <tr key={pc.id} className="hover:bg-slate-50 transition-colors duration-100 border-b border-slate-200">
+                                  <td className="py-2 px-4 text-[#e11d48] font-bold font-mono uppercase border-r border-slate-200 bg-indigo-50/5">
+                                    {pc.code}
+                                  </td>
+                                  <td className="py-2 px-4 text-slate-800 font-bold uppercase border-r border-slate-200">
+                                    {pc.name}
+                                  </td>
+                                  <td className="py-2 px-4 text-slate-600 uppercase border-r border-slate-200">
+                                    {pc.location}
+                                  </td>
+                                  <td className="py-2 px-4 text-center">
+                                    <button
+                                      onClick={() => handleDeleteProjectCode(pc.id, pc.code)}
+                                      title="Delete Mapping"
+                                      className="p-1 px-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-800 border border-rose-200 rounded cursor-pointer transition-colors"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5 inline" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
+                )}
+
+              </div>
+            )}
 
           </div>
         )}
@@ -1339,6 +2258,82 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* CUSTOM CONFIRMATION DIALOG MODAL */}
+      {confirmState.isOpen && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden transform scale-100 transition-all animate-slide-in">
+            <div className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="bg-rose-50 text-rose-600 p-3 rounded-2xl border border-rose-100">
+                  <AlertCircle className="h-6 w-6 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 font-display uppercase tracking-tight">
+                    {confirmState.title}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-2 font-medium leading-relaxed">
+                    {confirmState.message}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex items-center justify-end gap-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmState(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-slate-200/60 rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmState.onConfirm();
+                }}
+                className="px-5 py-2 text-xs font-bold uppercase tracking-wide text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md shadow-rose-200 cursor-pointer"
+              >
+                {confirmState.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CUSTOM NOTIFICATION TOAST */}
+      {notificationState.isOpen && (
+        <div className="fixed bottom-6 right-6 z-55 max-w-sm w-full bg-white rounded-2xl border border-slate-200 shadow-xl p-4 flex items-start gap-3 animate-slide-in">
+          <div className={`p-2 rounded-xl border ${
+            notificationState.type === "success" 
+              ? "bg-emerald-50 text-emerald-600 border-emerald-100" 
+              : notificationState.type === "error"
+              ? "bg-rose-50 text-rose-600 border-rose-100"
+              : "bg-blue-50 text-blue-600 border-blue-100"
+          }`}>
+            {notificationState.type === "success" ? (
+              <CheckCircle2 className="h-5 w-5 animate-bounce" />
+            ) : notificationState.type === "error" ? (
+              <AlertCircle className="h-5 w-5" />
+            ) : (
+              <Info className="h-5 w-5" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+              {notificationState.title}
+            </h4>
+            <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">
+              {notificationState.message}
+            </p>
+          </div>
+          <button
+            onClick={() => setNotificationState(prev => ({ ...prev, isOpen: false }))}
+            className="text-slate-400 hover:text-slate-600 text-sm font-bold font-mono px-1.5 py-0.5 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
     </div>
   );

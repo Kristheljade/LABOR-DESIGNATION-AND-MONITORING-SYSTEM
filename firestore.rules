@@ -4,5 +4,11 @@ service cloud.firestore {
     match /submissions/{id} {
       allow read, write: if true;
     }
+    match /labor_codes/{id} {
+      allow read, write: if true;
+    }
+    match /project_codes/{id} {
+      allow read, write: if true;
+    }
   }
 }
