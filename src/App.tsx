@@ -132,7 +132,7 @@ export default function App() {
   // Navigation & authentication state
   const [currentView, setCurrentView] = useState<"form" | "admin">("form");
   const [passcode, setPasscode] = useState<string>("");
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string>("");
   const [checkingAuth, setCheckingAuth] = useState<boolean>(false);
 
@@ -183,12 +183,12 @@ export default function App() {
     }
   }, []);
 
-  // Fetch admin logs whenever authentication status toggles to active
+  // Fetch admin logs whenever admin view is active or authenticated
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated || currentView === "admin") {
       fetchSubmissions();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, currentView]);
 
   // Handle password submission and save token to browser cache
   const verifyStoredPasscode = async (code: string) => {
@@ -350,16 +350,13 @@ export default function App() {
     setIsLoadingLogs(true);
     setLogsError("");
     try {
-      const res = await fetch("/api/submissions", {
-        headers: { "x-admin-passcode": passcode },
-      });
+      const res = await fetch("/api/submissions");
 
       if (res.ok) {
         const data = await res.json();
         setSubmissions(data);
       } else {
-        setLogsError("Unauthorized or expired credentials. Re-enter password.");
-        setIsAuthenticated(false);
+        setLogsError("Error retrieving database log sheet entries from server.");
       }
     } catch (err) {
       setLogsError("Error loading logs from server.");
@@ -376,7 +373,6 @@ export default function App() {
     try {
       const res = await fetch(`/api/submissions/${id}`, {
         method: "DELETE",
-        headers: { "x-admin-passcode": passcode },
       });
 
       if (res.ok) {
@@ -391,7 +387,7 @@ export default function App() {
 
   // Excel UTF-8 safe CSV Downloader
   const downloadCSV = () => {
-    window.open(`/api/export?passcode=${encodeURIComponent(passcode)}`, "_blank");
+    window.open("/api/export", "_blank");
   };
 
   // Modern PDF Downloader of Filtered logs with Document Controller branding Header details
@@ -951,119 +947,58 @@ export default function App() {
         {currentView === "admin" && (
           <div id="admin-container" className="space-y-6">
             
-            {/* Authenticator Form Guard */}
-            {!isAuthenticated ? (
-              <div id="admin-login-card" className="max-w-md mx-auto bg-white rounded-3xl shadow-[0_20px_25px_-5px_rgba(0,0,0,0.05),0_10px_10px_-5px_rgba(0,0,0,0.02)] border border-slate-200/60 p-8 md:p-10 mt-12">
-                <div className="text-center mb-6">
-                  <div className="bg-slate-50 text-slate-600 p-3.5 rounded-full inline-block mb-3 border border-slate-100">
-                    <Lock className="h-6 w-6" />
+            {/* LOGS DASHBOARD ACTIVE VIEW */}
+            <div id="logs-dashboard" className="space-y-6">
+              
+              {/* Admin Header Commands */}
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="bg-slate-50 text-slate-700 p-2.5 rounded-xl border border-slate-100">
+                    <FileSpreadsheet className="h-5 w-5" />
                   </div>
-                  <h2 className="text-xl font-semibold text-slate-900 font-display uppercase tracking-tight">Admin Authentication</h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Please provide the system passcode to access the database ledger.
-                  </p>
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight">Document Controller Console</h2>
+                    <p className="text-xs text-slate-400 font-mono">
+                      Active Database Ledger Log
+                    </p>
+                  </div>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-4">
-                  {authError && (
-                    <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-xs text-rose-700 flex items-start gap-1.5">
-                      <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
-                      <span>{authError}</span>
-                    </div>
-                  )}
-
-                  <div className="flex flex-col">
-                    <label className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 text-center">
-                      Security Passcode
-                    </label>
-                    <input
-                      id="admin-passcode-input"
-                      type="password"
-                      required
-                      placeholder="••••••"
-                      value={passcode}
-                      onChange={(e) => setPasscode(e.target.value)}
-                      className="w-full text-center tracking-[0.5em] font-mono border border-slate-200 rounded-xl py-3 px-4 text-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 bg-slate-50"
-                    />
-                  </div>
-
+                <div className="flex flex-wrap gap-2 w-full md:w-auto">
                   <button
-                    id="submit-passcode-btn"
-                    type="submit"
-                    disabled={checkingAuth}
-                    className="w-full py-3.5 px-4 border border-transparent text-xs font-bold uppercase tracking-wider rounded-xl text-white bg-slate-900 hover:bg-slate-800 focus:outline-none disabled:opacity-50 cursor-pointer shadow-sm transition-all duration-150"
+                    id="export-csv-btn"
+                    onClick={downloadCSV}
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-transparent text-xs font-semibold uppercase tracking-wide text-white bg-slate-900 hover:bg-slate-800 rounded-xl cursor-pointer shadow-sm transition-colors"
                   >
-                    {checkingAuth ? "Verifying..." : "Unlock Database Ledger"}
+                    <Download className="h-4 w-4" /> Export CSV Sheet
                   </button>
 
-                  <div className="bg-slate-50 rounded-xl p-3.5 text-2xs text-slate-400 mt-4 border border-slate-100 leading-relaxed font-mono">
-                    <p className="font-bold text-slate-500 mb-1">💡 Quick Access Option:</p>
-                    <p>The default ledger passcode is: <code className="bg-slate-200/80 text-slate-700 px-1 rounded font-bold">123456</code></p>
-                    <button
-                      type="button"
-                      onClick={handleQuickLogin}
-                      disabled={checkingAuth}
-                      className="mt-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 py-2 rounded-lg cursor-pointer transition-colors w-full text-center flex items-center justify-center gap-1.5 shadow-sm"
-                    >
-                      ⚡ Quick Pre-Fill &amp; Log In
-                    </button>
-                  </div>
-                </form>
-              </div>
-            ) : (
-              
-              /* LOGS DASHBOARD ACTIVE VIEW */
-              <div id="logs-dashboard" className="space-y-6">
-                
-                {/* Admin Header Commands */}
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-slate-50 text-slate-700 p-2.5 rounded-xl border border-slate-100">
-                      <Unlock className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight">Document Controller Console</h2>
-                      <p className="text-xs text-slate-400 font-mono">
-                        Secure Session Key Active
-                      </p>
-                    </div>
-                  </div>
+                  <button
+                    id="export-pdf-btn"
+                    onClick={exportPDF}
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-300 rounded-xl cursor-pointer shadow-sm transition-all duration-150"
+                  >
+                    <FileText className="h-4 w-4 text-slate-500" /> Export PDF Log
+                  </button>
+                  
+                  <button
+                    id="refresh-logs-btn"
+                    onClick={fetchSubmissions}
+                    disabled={isLoadingLogs}
+                    className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${isLoadingLogs ? "animate-spin" : ""}`} />
+                  </button>
 
-                  <div className="flex flex-wrap gap-2 w-full md:w-auto">
-                    <button
-                      id="export-csv-btn"
-                      onClick={downloadCSV}
-                      className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-white bg-slate-900 hover:bg-slate-800 rounded-xl cursor-pointer shadow-sm transition-colors"
-                    >
-                      <Download className="h-4 w-4" /> Export CSV Sheet
-                    </button>
-
-                    <button
-                      id="export-pdf-btn"
-                      onClick={exportPDF}
-                      className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-300 rounded-xl cursor-pointer shadow-sm transition-all duration-150"
-                    >
-                      <FileText className="h-4 w-4 text-slate-500" /> Export PDF Log
-                    </button>
-                    
-                    <button
-                      id="refresh-logs-btn"
-                      onClick={fetchSubmissions}
-                      disabled={isLoadingLogs}
-                      className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
-                    >
-                      <RefreshCw className={`h-4 w-4 ${isLoadingLogs ? "animate-spin" : ""}`} />
-                    </button>
-
-                    <button
-                      id="lock-console-btn"
-                      onClick={handleLogout}
-                      className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-rose-600 hover:bg-rose-50 rounded-xl cursor-pointer transition-colors"
-                    >
-                      <LogOut className="h-4 w-4" /> Sign Out
-                    </button>
-                  </div>
+                  <button
+                    id="lock-console-btn"
+                    onClick={() => setCurrentView("form")}
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                  >
+                    <LogOut className="h-4 w-4" /> Back to Form
+                  </button>
                 </div>
+              </div>
 
 
 
@@ -1363,9 +1298,7 @@ export default function App() {
                   </div>
 
                 </div>
-
               </div>
-            )}
 
           </div>
         )}

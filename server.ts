@@ -43,35 +43,16 @@ async function getAdminPasscode(): Promise<string> {
   return ADMIN_PASSCODE;
 }
 
-// Middleware to check admin passcode
+// Middleware to check admin passcode (Bypassed for instant direct access)
 async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): Promise<any> {
-  try {
-    const code = req.headers["x-admin-passcode"] || req.query.passcode;
-    const currentPasscode = await getAdminPasscode();
-    if (!code || code !== currentPasscode) {
-      return res.status(401).json({ error: "Unauthorized: Invalid passcode" });
-    }
-    next();
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  next();
 }
 
 // API Routes
 
-// Verify passcode
+// Verify passcode (Bypassed for instant direct access)
 app.post("/api/verify-passcode", async (req, res) => {
-  try {
-    const { passcode } = req.body;
-    const currentPasscode = await getAdminPasscode();
-    if (passcode === currentPasscode) {
-      res.json({ valid: true });
-    } else {
-      res.json({ valid: false });
-    }
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  res.json({ valid: true });
 });
 
 // Create submission (Public)
