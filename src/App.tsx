@@ -957,9 +957,14 @@ export default function App() {
                     <FileSpreadsheet className="h-5 w-5" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight">Document Controller Console</h2>
+                    <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight flex flex-wrap items-center gap-2">
+                      <span>Document Controller Console</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 font-bold tracking-normal uppercase">
+                        ● Live Database Connected
+                      </span>
+                    </h2>
                     <p className="text-xs text-slate-400 font-mono">
-                      Active Database Ledger Log
+                      Active Database Ledger Log (entries.json)
                     </p>
                   </div>
                 </div>
