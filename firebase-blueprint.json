@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "submission": {
+      "title": "Submission",
+      "description": "A labor designation entry registered by site engineers.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the log entry."
+        },
+        "date": {
+          "type": "string",
+          "description": "The calendar date of the labor assignment."
+        },
+        "project": {
+          "type": "string",
+          "description": "The name of the project."
+        },
+        "laborsName": {
+          "type": "string",
+          "description": "The name of the subcontracted external labor."
+        },
+        "designation": {
+          "type": "string",
+          "description": "The professional role or designation of the labor."
+        },
+        "projectLocation": {
+          "type": "string",
+          "description": "The construction site location."
+        },
+        "siteEngineer": {
+          "type": "string",
+          "description": "The supervising site engineer."
+        },
+        "reassignedTask": {
+          "type": "string",
+          "description": "The precise task assigned for monitoring."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "The ISO timestamp when this entry was submitted."
+        }
+      },
+      "required": [
+        "id",
+        "date",
+        "project",
+        "laborsName",
+        "designation",
+        "projectLocation",
+        "siteEngineer",
+        "reassignedTask",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/submissions/{id}": {
+      "schema": "submission",
+      "description": "A collection of individual external subcontracted labor designation entries."
+    }
+  }
+}

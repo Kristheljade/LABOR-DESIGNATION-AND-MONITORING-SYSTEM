@@ -4,6 +4,15 @@ import { existsSync } from "fs";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { initializeApp } from "firebase/app";
+import { 
+  getFirestore, 
+  collection, 
+  getDocs, 
+  doc, 
+  setDoc, 
+  deleteDoc
+} from "firebase/firestore";
 
 dotenv.config();
 
@@ -13,8 +22,77 @@ const DATA_FILE = path.join(process.cwd(), "entries.json");
 
 app.use(express.json());
 
+// Dynamic/Lazy Firebase setup
+let db: any = null;
+
+async function getDb() {
+  if (db) return db;
+
+  // Default values from firebase-applet-config.json
+  let config = {
+    projectId: "alien-tracer-9sc93",
+    appId: "1:884780340480:web:39fb26bb42c6bb35520fe5",
+    apiKey: "AIzaSyAHXX3X3mKnXrFSByq3apg28Gu_sjp8WnE",
+    authDomain: "alien-tracer-9sc93.firebaseapp.com",
+    storageBucket: "alien-tracer-9sc93.firebasestorage.app",
+    messagingSenderId: "884780340480",
+    databaseId: "ai-studio-2258ac32-355e-4529-818e-ffba2a83c4be"
+  };
+
+  try {
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    if (existsSync(configPath)) {
+      const configData = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(configData);
+      config = { ...config, ...parsed, databaseId: parsed.firestoreDatabaseId || parsed.databaseId };
+    }
+  } catch (error) {
+    console.warn("Failed to load firebase-applet-config.json, using defaults:", error);
+  }
+
+  try {
+    const firebaseApp = initializeApp({
+      apiKey: config.apiKey,
+      authDomain: config.authDomain,
+      projectId: config.projectId,
+      storageBucket: config.storageBucket,
+      messagingSenderId: config.messagingSenderId,
+      appId: config.appId
+    });
+
+    if (config.databaseId) {
+      db = getFirestore(firebaseApp, config.databaseId);
+    } else {
+      db = getFirestore(firebaseApp);
+    }
+    console.log("Firebase initialized successfully with project ID:", config.projectId);
+    return db;
+  } catch (error) {
+    console.error("Error initializing Firebase:", error);
+    return null;
+  }
+}
+
 // Helper to read submissions
 async function getSubmissions(): Promise<any[]> {
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const colRef = collection(firestoreDb, "submissions");
+      const querySnapshot = await getDocs(colRef);
+      const list: any[] = [];
+      querySnapshot.forEach((doc) => {
+        list.push({ id: doc.id, ...doc.data() });
+      });
+
+      // Cache locally to keep offline fallback sync
+      await fs.writeFile(DATA_FILE, JSON.stringify(list, null, 2), "utf-8");
+      return list;
+    }
+  } catch (error) {
+    console.warn("Firebase fetch failed, falling back to local file cache:", error);
+  }
+
   try {
     if (!existsSync(DATA_FILE)) {
       return [];
@@ -22,17 +100,8 @@ async function getSubmissions(): Promise<any[]> {
     const data = await fs.readFile(DATA_FILE, "utf-8");
     return JSON.parse(data || "[]");
   } catch (error) {
-    console.error("Error reading submissions:", error);
+    console.error("Error reading submissions from fallback:", error);
     return [];
-  }
-}
-
-// Helper to save submissions
-async function saveSubmissions(submissions: any[]): Promise<void> {
-  try {
-    await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
-  } catch (error) {
-    console.error("Error saving submissions:", error);
   }
 }
 
@@ -64,9 +133,8 @@ app.post("/api/submissions", async (req, res) => {
       return res.status(400).json({ error: "All fields are required." });
     }
 
-    const submissions = await getSubmissions();
+    const id = Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6);
     const newSubmission = {
-      id: Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6),
       date,
       project,
       laborsName,
@@ -77,10 +145,33 @@ app.post("/api/submissions", async (req, res) => {
       createdAt: new Date().toISOString()
     };
 
-    submissions.push(newSubmission);
-    await saveSubmissions(submissions);
+    // Attempt to write to Firebase Firestore
+    let firebaseSuccess = false;
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, "submissions", id), newSubmission);
+        firebaseSuccess = true;
+        console.log(`Successfully stored entry ${id} in Firestore.`);
+      }
+    } catch (error) {
+      console.warn("Failed writing to Firebase Firestore, will rely on local storage cache:", error);
+    }
 
-    res.status(201).json({ success: true, entry: newSubmission });
+    // Always sync locally to keep the local entries.json database up to date
+    try {
+      let submissions = [];
+      if (existsSync(DATA_FILE)) {
+        const data = await fs.readFile(DATA_FILE, "utf-8");
+        submissions = JSON.parse(data || "[]");
+      }
+      submissions.push({ id, ...newSubmission });
+      await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
+    } catch (localError) {
+      console.error("Failed to write to local storage backup:", localError);
+    }
+
+    res.status(201).json({ success: true, entry: { id, ...newSubmission }, storedInFirebase: firebaseSuccess });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -91,7 +182,7 @@ app.get("/api/submissions", requireAdmin, async (req, res) => {
   try {
     const submissions = await getSubmissions();
     // Sort by date descending (or log date)
-    submissions.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    submissions.sort((a: any, b: any) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
     res.json(submissions);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -102,16 +193,35 @@ app.get("/api/submissions", requireAdmin, async (req, res) => {
 app.delete("/api/submissions/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    let submissions = await getSubmissions();
-    const initialLength = submissions.length;
-    submissions = submissions.filter((s: any) => s.id !== id);
 
-    if (submissions.length === initialLength) {
-      return res.status(404).json({ error: "Submission not found" });
+    // Attempt to delete from Firebase Firestore
+    let firebaseSuccess = false;
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        await deleteDoc(doc(firestoreDb, "submissions", id));
+        firebaseSuccess = true;
+        console.log(`Successfully deleted entry ${id} from Firestore.`);
+      }
+    } catch (error) {
+      console.warn("Failed to delete from Firebase Firestore, will remove from local storage cache:", error);
     }
 
-    await saveSubmissions(submissions);
-    res.json({ success: true });
+    // Always sync locally to remove from the local backup entries.json database
+    let initialLength = 0;
+    try {
+      if (existsSync(DATA_FILE)) {
+        const data = await fs.readFile(DATA_FILE, "utf-8");
+        let submissions = JSON.parse(data || "[]");
+        initialLength = submissions.length;
+        submissions = submissions.filter((s: any) => s.id !== id);
+        await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
+      }
+    } catch (localError) {
+      console.error("Failed to update local storage backup during deletion:", localError);
+    }
+
+    res.json({ success: true, deletedFromFirebase: firebaseSuccess });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
