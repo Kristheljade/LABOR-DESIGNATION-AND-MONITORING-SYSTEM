@@ -36,40 +36,11 @@ async function saveSubmissions(submissions: any[]): Promise<void> {
   }
 }
 
-const PASSCODE_FILE = path.join(process.cwd(), "config-passcode.json");
-
-interface PasscodeConfig {
-  passcode: string;
-  recoveryCode?: string;
-}
-
-// Helper to load passcode configuration with default fallbacks
-async function getPasscodeConfig(): Promise<PasscodeConfig> {
-  const defaultPasscode = process.env.ADMIN_PASSPHRASE || "123456";
-  const defaultRecoveryCode = "KRISTHEL";
-  
-  try {
-    if (existsSync(PASSCODE_FILE)) {
-      const data = await fs.readFile(PASSCODE_FILE, "utf-8");
-      const parsed = JSON.parse(data || "{}");
-      return {
-        passcode: parsed.passcode || defaultPasscode,
-        recoveryCode: parsed.recoveryCode || parsed.recoveryAnswer || defaultRecoveryCode,
-      };
-    }
-  } catch (error) {
-    console.error("Error reading config file:", error);
-  }
-  return {
-    passcode: defaultPasscode,
-    recoveryCode: defaultRecoveryCode,
-  };
-}
+const ADMIN_PASSCODE = process.env.ADMIN_PASSPHRASE || "123456";
 
 // Get admin passcode
 async function getAdminPasscode(): Promise<string> {
-  const config = await getPasscodeConfig();
-  return config.passcode;
+  return ADMIN_PASSCODE;
 }
 
 // Middleware to check admin passcode
@@ -98,61 +69,6 @@ app.post("/api/verify-passcode", async (req, res) => {
     } else {
       res.json({ valid: false });
     }
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Reset passcode via master recovery code (Forgot password/passcode flow)
-app.post("/api/reset-passcode", async (req, res) => {
-  try {
-    const { recoveryCode, newPasscode } = req.body;
-    if (!recoveryCode || typeof recoveryCode !== "string" || recoveryCode.trim().length === 0) {
-      return res.status(400).json({ error: "Master recovery code is required." });
-    }
-    if (!newPasscode || typeof newPasscode !== "string" || newPasscode.trim().length === 0) {
-      return res.status(400).json({ error: "New passcode cannot be empty." });
-    }
-
-    const config = await getPasscodeConfig();
-    const normalizedConfigCode = (config.recoveryCode || "SHAMJAS").trim().toLowerCase();
-    const normalizedUserCode = recoveryCode.trim().toLowerCase();
-
-    if (normalizedUserCode === normalizedConfigCode) {
-      config.passcode = newPasscode.trim();
-      await fs.writeFile(PASSCODE_FILE, JSON.stringify(config, null, 2), "utf-8");
-      res.json({ success: true, message: "Security passcode reset successfully." });
-    } else {
-      res.status(400).json({ error: "Incorrect master recovery code. Passcode reset denied." });
-    }
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update passcode and security configuration (Admin/Document Controller only)
-app.post("/api/set-passcode", requireAdmin, async (req, res) => {
-  try {
-    const { newPasscode, recoveryCode } = req.body;
-    
-    const config = await getPasscodeConfig();
-
-    if (newPasscode !== undefined) {
-      if (typeof newPasscode !== "string" || newPasscode.trim().length === 0) {
-        return res.status(400).json({ error: "Invalid passcode. Passcode cannot be empty." });
-      }
-      config.passcode = newPasscode.trim();
-    }
-
-    if (recoveryCode !== undefined) {
-      if (typeof recoveryCode !== "string" || recoveryCode.trim().length === 0) {
-        return res.status(400).json({ error: "Recovery code cannot be empty." });
-      }
-      config.recoveryCode = recoveryCode.trim();
-    }
-
-    await fs.writeFile(PASSCODE_FILE, JSON.stringify(config, null, 2), "utf-8");
-    res.json({ success: true, message: "Security configurations updated successfully." });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

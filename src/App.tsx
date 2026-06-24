@@ -175,23 +175,6 @@ export default function App() {
     safeStorage.setItem("binlahej_logo_bg", bgKey);
   };
 
-  // Passcode creation/management state
-  const [newPasscode, setNewPasscode] = useState<string>("");
-  const [updatingPasscode, setUpdatingPasscode] = useState<boolean>(false);
-  const [passcodeStatus, setPasscodeStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
-
-  // Password Recovery / Reset state
-  const [isForgotMode, setIsForgotMode] = useState<boolean>(false);
-  const [recoveryCode, setRecoveryCode] = useState<string>("");
-  const [recoveryNewPasscode, setRecoveryNewPasscode] = useState<string>("");
-  const [recoveryConfirmPasscode, setRecoveryConfirmPasscode] = useState<string>("");
-  const [recoveryError, setRecoveryError] = useState<string>("");
-  const [recoverySuccess, setRecoverySuccess] = useState<string>("");
-  const [isRecovering, setIsRecovering] = useState<boolean>(false);
-
-  // Custom Recovery settings (Admin view)
-  const [customRecoveryCode, setCustomRecoveryCode] = useState<string>("");
-
   // Load existing passcode from cache on startup
   useEffect(() => {
     const savedCode = safeStorage.getItem("binlahej_passcode");
@@ -267,108 +250,29 @@ export default function App() {
     setPasscode("");
     safeStorage.removeItem("binlahej_passcode");
     setCurrentView("form");
-    setNewPasscode("");
-    setPasscodeStatus(null);
   };
 
-  const handleForgotPasscodeClick = () => {
-    setIsForgotMode(true);
-    setRecoveryError("");
-    setRecoverySuccess("");
-    setRecoveryCode("");
-    setRecoveryNewPasscode("");
-    setRecoveryConfirmPasscode("");
-  };
-
-  const handleRecoverySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRecoveryError("");
-    setRecoverySuccess("");
-
-    if (!recoveryCode.trim()) {
-      setRecoveryError("Please enter the master recovery code.");
-      return;
-    }
-    if (!recoveryNewPasscode.trim()) {
-      setRecoveryError("Please enter your new passcode.");
-      return;
-    }
-    if (recoveryNewPasscode !== recoveryConfirmPasscode) {
-      setRecoveryError("New passcodes do not match. Please verify.");
-      return;
-    }
-
+  const handleQuickLogin = async () => {
+    setCheckingAuth(true);
+    setAuthError("");
     try {
-      setIsRecovering(true);
-      const res = await fetch("/api/reset-passcode", {
+      const res = await fetch("/api/verify-passcode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recoveryCode: recoveryCode.trim(),
-          newPasscode: recoveryNewPasscode.trim(),
-        }),
+        body: JSON.stringify({ passcode: "123456" }),
       });
-
       const data = await res.json();
-      if (res.ok && data.success) {
-        setRecoverySuccess("Passcode reset successfully! Redirecting you to sign in with your new passcode.");
-        setTimeout(() => {
-          setPasscode(recoveryNewPasscode.trim());
-          setIsForgotMode(false);
-          setRecoverySuccess("");
-        }, 2200);
+      if (data.valid) {
+        setIsAuthenticated(true);
+        setPasscode("123456");
+        safeStorage.setItem("binlahej_passcode", "123456");
       } else {
-        setRecoveryError(data.error || "Reset failed. Incorrect master recovery code.");
+        setAuthError("Incorrect admin passcode. Please verify server settings.");
       }
     } catch (err) {
-      setRecoveryError("Failed to communicate with recovery server.");
+      setAuthError("Failed to communicate with authorization server.");
     } finally {
-      setIsRecovering(false);
-    }
-  };
-
-  const handleUpdatePasscode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPasscodeStatus(null);
-
-    // If all are empty, warn
-    if (!newPasscode.trim() && !customRecoveryCode.trim()) {
-      setPasscodeStatus({ type: "error", message: "Please fill in at least one setting to update." });
-      return;
-    }
-
-    try {
-      setUpdatingPasscode(true);
-      
-      const res = await fetch("/api/set-passcode", {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "x-admin-passcode": passcode
-        },
-        body: JSON.stringify({ 
-          newPasscode: newPasscode.trim() || undefined,
-          recoveryCode: customRecoveryCode.trim() || undefined
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        if (newPasscode.trim()) {
-          setPasscode(newPasscode.trim());
-          safeStorage.setItem("binlahej_passcode", newPasscode.trim());
-        }
-        setPasscodeStatus({ type: "success", message: "Security configurations updated successfully! All future session validations and passcode resets will use these settings." });
-        setNewPasscode("");
-        setCustomRecoveryCode(""); // Clear field
-      } else {
-        setPasscodeStatus({ type: "error", message: data.error || "Failed to update security configuration." });
-      }
-    } catch (err) {
-      console.error("Error setting passcode:", err);
-      setPasscodeStatus({ type: "error", message: "Server connection failed." });
-    } finally {
-      setUpdatingPasscode(false);
+      setCheckingAuth(false);
     }
   };
 
@@ -1050,159 +954,61 @@ export default function App() {
             {/* Authenticator Form Guard */}
             {!isAuthenticated ? (
               <div id="admin-login-card" className="max-w-md mx-auto bg-white rounded-3xl shadow-[0_20px_25px_-5px_rgba(0,0,0,0.05),0_10px_10px_-5px_rgba(0,0,0,0.02)] border border-slate-200/60 p-8 md:p-10 mt-12">
-                {!isForgotMode ? (
-                  <>
-                    <div className="text-center mb-6">
-                      <div className="bg-slate-50 text-slate-600 p-3.5 rounded-full inline-block mb-3 border border-slate-100">
-                        <Lock className="h-6 w-6" />
-                      </div>
-                      <h2 className="text-xl font-semibold text-slate-900 font-display uppercase tracking-tight">Admin Authentication</h2>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Please provide the system passcode to access the database ledger.
-                      </p>
+                <div className="text-center mb-6">
+                  <div className="bg-slate-50 text-slate-600 p-3.5 rounded-full inline-block mb-3 border border-slate-100">
+                    <Lock className="h-6 w-6" />
+                  </div>
+                  <h2 className="text-xl font-semibold text-slate-900 font-display uppercase tracking-tight">Admin Authentication</h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Please provide the system passcode to access the database ledger.
+                  </p>
+                </div>
+
+                <form onSubmit={handleLogin} className="space-y-4">
+                  {authError && (
+                    <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-xs text-rose-700 flex items-start gap-1.5">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
+                      <span>{authError}</span>
                     </div>
+                  )}
 
-                    <form onSubmit={handleLogin} className="space-y-4">
-                      {authError && (
-                        <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-xs text-rose-700 flex items-start gap-1.5">
-                          <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
-                          <span>{authError}</span>
-                        </div>
-                      )}
+                  <div className="flex flex-col">
+                    <label className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 text-center">
+                      Security Passcode
+                    </label>
+                    <input
+                      id="admin-passcode-input"
+                      type="password"
+                      required
+                      placeholder="••••••"
+                      value={passcode}
+                      onChange={(e) => setPasscode(e.target.value)}
+                      className="w-full text-center tracking-[0.5em] font-mono border border-slate-200 rounded-xl py-3 px-4 text-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 bg-slate-50"
+                    />
+                  </div>
 
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 text-center">
-                          Security Passcode
-                        </label>
-                        <input
-                          id="admin-passcode-input"
-                          type="password"
-                          required
-                          placeholder="••••••"
-                          value={passcode}
-                          onChange={(e) => setPasscode(e.target.value)}
-                          className="w-full text-center tracking-[0.5em] font-mono border border-slate-200 rounded-xl py-3 px-4 text-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 bg-slate-50"
-                        />
-                      </div>
+                  <button
+                    id="submit-passcode-btn"
+                    type="submit"
+                    disabled={checkingAuth}
+                    className="w-full py-3.5 px-4 border border-transparent text-xs font-bold uppercase tracking-wider rounded-xl text-white bg-slate-900 hover:bg-slate-800 focus:outline-none disabled:opacity-50 cursor-pointer shadow-sm transition-all duration-150"
+                  >
+                    {checkingAuth ? "Verifying..." : "Unlock Database Ledger"}
+                  </button>
 
-                      <div className="text-right">
-                        <button
-                          type="button"
-                          onClick={handleForgotPasscodeClick}
-                          className="text-xs text-slate-500 hover:text-slate-900 font-semibold underline cursor-pointer"
-                        >
-                          Forgot Passcode?
-                        </button>
-                      </div>
-
-                      <button
-                        id="submit-passcode-btn"
-                        type="submit"
-                        disabled={checkingAuth}
-                        className="w-full py-3 px-4 border border-transparent text-xs font-bold uppercase tracking-wider rounded-xl text-white bg-slate-900 hover:bg-slate-800 focus:outline-none disabled:opacity-50 cursor-pointer shadow-sm transition-all duration-150"
-                      >
-                        {checkingAuth ? "Verifying..." : "Unlock Database Ledger"}
-                      </button>
-
-                      <div className="bg-slate-50 rounded-xl p-3.5 text-2xs text-slate-400 mt-4 border border-slate-100 leading-relaxed font-mono">
-                        <p className="font-bold text-slate-500 mb-1">💡 Access Credentials:</p>
-                        <p>• Fallback default passcode is: <code className="bg-slate-200/80 text-slate-700 px-1 rounded font-bold">123456</code></p>
-                        <p className="mt-1">Once logged in, the Document Controller can define, create and update a secure custom passcode directly inside this console.</p>
-                      </div>
-                    </form>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-center mb-6">
-                      <div className="bg-amber-50 text-amber-600 p-3.5 rounded-full inline-block mb-3 border border-amber-100">
-                        <Key className="h-6 w-6" />
-                      </div>
-                      <h2 className="text-xl font-semibold text-slate-900 font-display uppercase tracking-tight">Passcode Recovery</h2>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Provide your master recovery code to set a new passcode.
-                      </p>
-                    </div>
-
-                    <form onSubmit={handleRecoverySubmit} className="space-y-4">
-                      {recoveryError && (
-                        <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-xs text-rose-700 flex items-start gap-1.5">
-                          <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
-                          <span>{recoveryError}</span>
-                        </div>
-                      )}
-
-                      {recoverySuccess && (
-                        <div className="bg-emerald-50 border-l-4 border-emerald-500 p-3 rounded text-xs text-emerald-700 flex items-start gap-1.5">
-                          <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-500" />
-                          <span>{recoverySuccess}</span>
-                        </div>
-                      )}
-
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                          Master Recovery Code
-                        </label>
-                        <input
-                          id="recovery-code-input"
-                          type="text"
-                          required
-                          placeholder="Enter master recovery code"
-                          value={recoveryCode}
-                          onChange={(e) => setRecoveryCode(e.target.value)}
-                          className="w-full border border-slate-200 rounded-xl py-2.5 px-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 bg-slate-50 font-medium"
-                        />
-                      </div>
-
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                          New Security Passcode
-                        </label>
-                        <input
-                          id="recovery-new-passcode-input"
-                          type="password"
-                          required
-                          placeholder="Enter new passcode"
-                          value={recoveryNewPasscode}
-                          onChange={(e) => setRecoveryNewPasscode(e.target.value)}
-                          className="w-full border border-slate-200 rounded-xl py-2.5 px-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 bg-slate-50 font-mono font-semibold tracking-wide"
-                        />
-                      </div>
-
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                          Confirm New Passcode
-                        </label>
-                        <input
-                          id="recovery-confirm-passcode-input"
-                          type="password"
-                          required
-                          placeholder="Confirm new passcode"
-                          value={recoveryConfirmPasscode}
-                          onChange={(e) => setRecoveryConfirmPasscode(e.target.value)}
-                          className="w-full border border-slate-200 rounded-xl py-2.5 px-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 bg-slate-50 font-mono font-semibold tracking-wide"
-                        />
-                      </div>
-
-                      <div className="flex gap-3 pt-2">
-                        <button
-                          type="button"
-                          onClick={() => setIsForgotMode(false)}
-                          className="flex-1 py-3 px-4 border border-slate-200 text-xs font-bold uppercase tracking-wider rounded-xl text-slate-600 bg-white hover:bg-slate-50 focus:outline-none cursor-pointer transition-all duration-150 font-semibold"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          id="submit-recovery-btn"
-                          type="submit"
-                          disabled={isRecovering}
-                          className="flex-1 py-3 px-4 border border-transparent text-xs font-bold uppercase tracking-wider rounded-xl text-white bg-slate-900 hover:bg-slate-800 focus:outline-none disabled:opacity-50 cursor-pointer shadow-sm transition-all duration-150 font-bold"
-                        >
-                          {isRecovering ? "Resetting..." : "Reset Passcode"}
-                        </button>
-                      </div>
-                    </form>
-                  </>
-                )}
+                  <div className="bg-slate-50 rounded-xl p-3.5 text-2xs text-slate-400 mt-4 border border-slate-100 leading-relaxed font-mono">
+                    <p className="font-bold text-slate-500 mb-1">💡 Quick Access Option:</p>
+                    <p>The default ledger passcode is: <code className="bg-slate-200/80 text-slate-700 px-1 rounded font-bold">123456</code></p>
+                    <button
+                      type="button"
+                      onClick={handleQuickLogin}
+                      disabled={checkingAuth}
+                      className="mt-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 py-2 rounded-lg cursor-pointer transition-colors w-full text-center flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      ⚡ Quick Pre-Fill &amp; Log In
+                    </button>
+                  </div>
+                </form>
               </div>
             ) : (
               
@@ -1259,76 +1065,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Security Passcode Management Block */}
-                <div id="passcode-settings-card" className="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm">
-                  <div className="flex items-center gap-2 mb-4 pb-2 border-b border-slate-100">
-                    <Key className="h-4 w-4 text-slate-700" />
-                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-700">Security & Recovery Configuration</span>
-                  </div>
-                  
-                  <form onSubmit={handleUpdatePasscode} className="space-y-4 max-w-2xl">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="flex flex-col">
-                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block font-mono mb-1.5">
-                          Create New Passcode (Saves to System Config)
-                        </label>
-                        <input
-                          id="new-passcode-input"
-                          type="text"
-                          placeholder="e.g. 987654 or binlahej_secure"
-                          value={newPasscode}
-                          onChange={(e) => {
-                            setNewPasscode(e.target.value);
-                            if (passcodeStatus) setPasscodeStatus(null);
-                          }}
-                          className="w-full px-3.5 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-800 bg-slate-50 font-mono tracking-wider font-semibold"
-                        />
-                      </div>
 
-                      <div className="flex flex-col">
-                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block font-mono mb-1.5">
-                          Set Master Recovery Code (Case-Insensitive)
-                        </label>
-                        <input
-                          id="recovery-code-setting-input"
-                          type="password"
-                          placeholder="e.g. KRISTHEL"
-                          value={customRecoveryCode}
-                          onChange={(e) => {
-                            setCustomRecoveryCode(e.target.value);
-                            if (passcodeStatus) setPasscodeStatus(null);
-                          }}
-                          className="w-full px-3.5 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-800 bg-slate-50 font-mono tracking-wider font-semibold"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end pt-2">
-                      <button
-                        id="save-passcode-btn"
-                        type="submit"
-                        disabled={updatingPasscode}
-                        className="w-full sm:w-auto px-6 py-2.5 border border-transparent text-xs font-bold uppercase tracking-wider rounded-xl text-white bg-slate-900 hover:bg-slate-800 focus:outline-none disabled:opacity-50 cursor-pointer shadow-sm transition-all duration-150 font-semibold"
-                      >
-                        {updatingPasscode ? "Updating Security..." : "Update Security Settings"}
-                      </button>
-                    </div>
-                  </form>
-
-                  {passcodeStatus && (
-                    <div className={`mt-3.5 p-3 rounded-xl text-xs flex items-center gap-2 ${
-                      passcodeStatus.type === "success" 
-                        ? "bg-emerald-50 text-emerald-800 border-l-4 border-emerald-500" 
-                        : "bg-rose-50 text-rose-800 border-l-4 border-rose-500"
-                    }`}>
-                      <AlertCircle className={`h-4 w-4 flex-shrink-0 ${passcodeStatus.type === "success" ? "text-emerald-500" : "text-rose-500"}`} />
-                      <span>{passcodeStatus.message}</span>
-                    </div>
-                  )}
-                  <p className="text-[10px] text-slate-400 font-mono mt-2 leading-relaxed">
-                    💡 Configuring a master recovery code allows you to securely reset the passcode if forgotten. By default, the recovery code is "KRISTHEL".
-                  </p>
-                </div>
 
                 {/* Dashboard Metrics Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
