@@ -1,0 +1,30 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-primary: #0f172a;
+  --color-secondary: #334155;
+  --color-accent-green: #475569;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+/* Custom minimal inputs with subtle shadows */
+.minimal-input {
+  transition: border-color 0.2s, box-shadow 0.2s;
+  border: 1px solid #e2e8f0;
+}
+.minimal-input:focus {
+  outline: none;
+  border-color: #334155;
+  box-shadow: 0 0 0 4px rgba(51, 65, 85, 0.05);
+}
+
