@@ -116,6 +116,30 @@
         "location",
         "createdAt"
       ]
+    },
+    "setting": {
+      "title": "Setting",
+      "description": "System settings and access control configuration.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Setting document identifier."
+        },
+        "passcode": {
+          "type": "string",
+          "description": "The secure passcode string stored in Firestore."
+        },
+        "isConfigured": {
+          "type": "boolean",
+          "description": "Whether this configuration setting has been initialized."
+        }
+      },
+      "required": [
+        "id",
+        "passcode",
+        "isConfigured"
+      ]
     }
   },
   "firestore": {
@@ -130,6 +154,10 @@
     "/project_codes/{id}": {
       "schema": "project_code",
       "description": "A collection of project codes, names, and site locations."
+    },
+    "/settings/{id}": {
+      "schema": "setting",
+      "description": "A collection of application settings including security and credentials."
     }
   }
 }

@@ -10,5 +10,8 @@ service cloud.firestore {
     match /project_codes/{id} {
       allow read, write: if true;
     }
+    match /settings/{id} {
+      allow read, write: if true;
+    }
   }
 }

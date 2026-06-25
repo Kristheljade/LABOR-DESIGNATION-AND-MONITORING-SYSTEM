@@ -10,6 +10,7 @@ import {
   collection, 
   getDocs, 
   doc, 
+  getDoc,
   setDoc, 
   deleteDoc
 } from "firebase/firestore";
@@ -180,6 +181,18 @@ const ADMIN_PASSCODE = process.env.ADMIN_PASSPHRASE || "123456";
 
 // Get admin passcode
 async function getAdminPasscode(): Promise<string> {
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const docRef = doc(firestoreDb, "settings", "passcode_config");
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return docSnap.data().passcode;
+      }
+    }
+  } catch (error) {
+    console.error("Error fetching passcode from Firestore:", error);
+  }
   return ADMIN_PASSCODE;
 }
 
@@ -190,9 +203,90 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
 
 // API Routes
 
-// Verify passcode (Bypassed for instant direct access)
+// GET passcode status
+app.get("/api/passcode-status", async (req, res) => {
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const docRef = doc(firestoreDb, "settings", "passcode_config");
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists() && docSnap.data().isConfigured) {
+        return res.json({ configured: true });
+      }
+    }
+    return res.json({ configured: false });
+  } catch (error: any) {
+    console.error("Error checking passcode status:", error);
+    return res.json({ configured: false });
+  }
+});
+
+// Verify passcode
 app.post("/api/verify-passcode", async (req, res) => {
-  res.json({ valid: true });
+  const { passcode } = req.body;
+  if (!passcode) {
+    return res.status(400).json({ valid: false, error: "Passcode is required." });
+  }
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const docRef = doc(firestoreDb, "settings", "passcode_config");
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const stored = docSnap.data().passcode;
+        return res.json({ valid: passcode === stored });
+      }
+    }
+    
+    // Fallback ONLY if database is not configured yet
+    if (process.env.ADMIN_PASSPHRASE) {
+      return res.json({ valid: passcode === process.env.ADMIN_PASSPHRASE });
+    }
+    // Default fallback (123456) ONLY if database is completely empty/unconfigured
+    return res.json({ valid: passcode === "123456" });
+  } catch (error: any) {
+    console.error("Error verifying passcode:", error);
+    return res.status(500).json({ valid: false, error: "Database error." });
+  }
+});
+
+// Setup or update passcode
+app.post("/api/setup-passcode", async (req, res) => {
+  const { currentPasscode, newPasscode } = req.body;
+  if (!newPasscode || newPasscode.trim().length < 4) {
+    return res.status(400).json({ error: "New passcode must be at least 4 characters long." });
+  }
+
+  try {
+    const firestoreDb = await getDb();
+    if (!firestoreDb) {
+      return res.status(500).json({ error: "Database not connected." });
+    }
+
+    const docRef = doc(firestoreDb, "settings", "passcode_config");
+    const docSnap = await getDoc(docRef);
+    const isConfigured = docSnap.exists() && docSnap.data().isConfigured;
+
+    if (isConfigured) {
+      // Must verify current passcode before updating
+      const stored = docSnap.data().passcode;
+      if (currentPasscode !== stored) {
+        return res.status(400).json({ error: "Incorrect current passcode. Cannot update security settings." });
+      }
+    }
+
+    // Save to Firestore
+    await setDoc(docRef, {
+      id: "passcode_config",
+      passcode: newPasscode,
+      isConfigured: true
+    });
+
+    return res.json({ success: true, message: "Passcode updated successfully!" });
+  } catch (error: any) {
+    console.error("Error setting up passcode:", error);
+    return res.status(500).json({ error: "Failed to update passcode in database." });
+  }
 });
 
 const CODES_FILE = path.join(process.cwd(), "labor_codes.json");

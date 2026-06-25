@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Lock, 
   Unlock, 
+  Shield,
   FileSpreadsheet, 
   PlusCircle, 
   Trash2, 
@@ -386,9 +387,9 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
                           }`}
                         >
                           <span className="font-mono text-xs font-bold text-slate-900">
-                            {opt.value} {!onlyDisplayValue && opt.label !== opt.value ? `- ${opt.label}` : ""}
+                            {opt.value} {opt.label !== opt.value ? `- ${opt.label}` : ""}
                           </span>
-                          {!onlyDisplayValue && opt.sublabel && (
+                          {opt.sublabel && (
                             <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider flex items-center gap-1 mt-0.5">
                               <MapPin className="h-2.5 w-2.5 text-slate-400" /> {opt.sublabel}
                             </span>
@@ -447,11 +448,29 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
 export default function App() {
   // Navigation & authentication state
   const [currentView, setCurrentView] = useState<"form" | "admin">("form");
-  const [adminTab, setAdminTab] = useState<"ledger" | "labor_codes">("ledger");
+  const [adminTab, setAdminTab] = useState<"ledger" | "labor_codes" | "security">("ledger");
   const [passcode, setPasscode] = useState<string>("");
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>("");
   const [checkingAuth, setCheckingAuth] = useState<boolean>(false);
+
+  // Passcode setup/change states
+  const [isPasscodeConfigured, setIsPasscodeConfigured] = useState<boolean | null>(null);
+  
+  // Create setup states
+  const [newSetupPasscode, setNewSetupPasscode] = useState<string>("");
+  const [confirmSetupPasscode, setConfirmSetupPasscode] = useState<string>("");
+  const [setupError, setSetupError] = useState<string>("");
+  const [setupSuccess, setSetupSuccess] = useState<string>("");
+  const [settingUp, setSettingUp] = useState<boolean>(false);
+
+  // Change states
+  const [currentChangePasscode, setCurrentChangePasscode] = useState<string>("");
+  const [newChangePasscode, setNewChangePasscode] = useState<string>("");
+  const [confirmChangePasscode, setConfirmChangePasscode] = useState<string>("");
+  const [changePasscodeError, setChangePasscodeError] = useState<string>("");
+  const [changePasscodeSuccess, setChangePasscodeSuccess] = useState<string>("");
+  const [changingPasscode, setChangingPasscode] = useState<boolean>(false);
 
   // Form input state
   const [formData, setFormData] = useState({
@@ -635,12 +654,28 @@ export default function App() {
     }
   };
 
+  const checkPasscodeStatus = async () => {
+    try {
+      const res = await fetch("/api/passcode-status");
+      if (res.ok) {
+        const data = await res.json();
+        setIsPasscodeConfigured(data.configured);
+      } else {
+        setIsPasscodeConfigured(false);
+      }
+    } catch (e) {
+      console.error("Failed to check passcode status:", e);
+      setIsPasscodeConfigured(false);
+    }
+  };
+
   // Load existing passcode from cache on startup
   useEffect(() => {
     const savedCode = safeStorage.getItem("binlahej_passcode");
     if (savedCode) {
       verifyStoredPasscode(savedCode);
     }
+    checkPasscodeStatus();
     fetchLaborCodes();
     fetchProjectCodes();
   }, []);
@@ -1018,27 +1053,93 @@ export default function App() {
     setCurrentView("form");
   };
 
-  const handleQuickLogin = async () => {
-    setCheckingAuth(true);
-    setAuthError("");
+  const handlePasscodeSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSetupPasscode.trim()) {
+      setSetupError("Passcode cannot be blank.");
+      return;
+    }
+    if (newSetupPasscode.length < 4) {
+      setSetupError("Passcode must be at least 4 characters.");
+      return;
+    }
+    if (newSetupPasscode !== confirmSetupPasscode) {
+      setSetupError("Passcodes do not match.");
+      return;
+    }
+
+    setSettingUp(true);
+    setSetupError("");
+    setSetupSuccess("");
+
     try {
-      const res = await fetch("/api/verify-passcode", {
+      const res = await fetch("/api/setup-passcode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passcode: "123456" }),
+        body: JSON.stringify({ newPasscode: newSetupPasscode })
       });
       const data = await res.json();
-      if (data.valid) {
+      if (res.ok) {
+        setSetupSuccess("Security passcode configured successfully!");
+        setPasscode(newSetupPasscode);
         setIsAuthenticated(true);
-        setPasscode("123456");
-        safeStorage.setItem("binlahej_passcode", "123456");
+        safeStorage.setItem("binlahej_passcode", newSetupPasscode);
+        setIsPasscodeConfigured(true);
+        setNewSetupPasscode("");
+        setConfirmSetupPasscode("");
       } else {
-        setAuthError("Incorrect admin passcode. Please verify server settings.");
+        setSetupError(data.error || "Failed to save passcode.");
       }
     } catch (err) {
-      setAuthError("Failed to communicate with authorization server.");
+      setSetupError("Communication error with server.");
     } finally {
-      setCheckingAuth(false);
+      setSettingUp(false);
+    }
+  };
+
+  const handlePasscodeChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChangePasscode.trim()) {
+      setChangePasscodeError("New passcode cannot be empty.");
+      return;
+    }
+    if (newChangePasscode.length < 4) {
+      setChangePasscodeError("New passcode must be at least 4 characters long.");
+      return;
+    }
+    if (newChangePasscode !== confirmChangePasscode) {
+      setChangePasscodeError("New passcodes do not match.");
+      return;
+    }
+
+    setChangingPasscode(true);
+    setChangePasscodeError("");
+    setChangePasscodeSuccess("");
+
+    try {
+      const res = await fetch("/api/setup-passcode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPasscode: currentChangePasscode,
+          newPasscode: newChangePasscode
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setChangePasscodeSuccess("Passcode updated successfully in Firebase Database!");
+        setPasscode(newChangePasscode);
+        safeStorage.setItem("binlahej_passcode", newChangePasscode);
+        setCurrentChangePasscode("");
+        setNewChangePasscode("");
+        setConfirmChangePasscode("");
+      } else {
+        setChangePasscodeError(data.error || "Failed to update passcode.");
+      }
+    } catch (err) {
+      setChangePasscodeError("Failed to communicate with authorization server.");
+    } finally {
+      setChangingPasscode(false);
     }
   };
 
@@ -1900,32 +2001,199 @@ export default function App() {
                     {/* ADMIN DATABASE VIEW */}
         {currentView === "admin" && (
           <div id="admin-container" className="space-y-6">
-            
-            {/* Elegant Sub-navigation for Console Views */}
-            <div className="flex border-b border-slate-200/80 mb-4 bg-white p-2 rounded-xl shadow-2xs">
-              <button
-                id="tab-ledger"
-                onClick={() => setAdminTab("ledger")}
-                className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
-                  adminTab === "ledger"
-                    ? "bg-slate-900 text-white shadow-xs"
-                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-                }`}
-              >
-                <FileSpreadsheet className="h-4 w-4" /> Ledger Logs Database
-              </button>
-              <button
-                id="tab-labor-codes"
-                onClick={() => setAdminTab("labor_codes")}
-                className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
-                  adminTab === "labor_codes"
-                    ? "bg-slate-900 text-white shadow-xs"
-                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-                }`}
-              >
-                <Key className="h-4 w-4" /> Manage Labor Codes System
-              </button>
-            </div>
+            {!isAuthenticated && isPasscodeConfigured === null && (
+              <div className="max-w-md mx-auto my-12 bg-white rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden p-8 flex flex-col items-center text-center animate-fade-in">
+                <RefreshCw className="h-8 w-8 animate-spin text-slate-600 mb-4" />
+                <p className="text-xs text-slate-500 font-mono">Loading Security Configuration...</p>
+              </div>
+            )}
+
+            {!isAuthenticated && isPasscodeConfigured === false && (
+              <div className="max-w-md mx-auto my-12 bg-white rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden p-8 flex flex-col items-center text-center animate-fade-in">
+                <div className="p-4 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-100 mb-6 animate-pulse">
+                  <Shield className="h-8 w-8" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900 uppercase tracking-tight">
+                  Passcode Configuration Setup
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 mb-6 font-medium">
+                  Bin Lahej General Maintenance & Contracting LLC
+                </p>
+                <div className="w-full bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 mb-6 text-left">
+                  <p className="text-2xs text-emerald-700 font-mono font-bold uppercase tracking-wider mb-1">Passcode Setup Required</p>
+                  <p className="text-[11px] text-emerald-600 leading-relaxed font-medium">
+                    This system's security has not been configured yet. As the Document Controller, please create your custom passcode to protect the database and restrict unauthorized access.
+                  </p>
+                </div>
+                <form onSubmit={handlePasscodeSetup} className="w-full space-y-4">
+                  <div className="text-left">
+                    <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Create Secure Passcode
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="••••••"
+                      value={newSetupPasscode}
+                      onChange={(e) => setNewSetupPasscode(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all text-center tracking-widest font-mono text-slate-800"
+                      required
+                    />
+                  </div>
+
+                  <div className="text-left">
+                    <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Confirm Passcode
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="••••••"
+                      value={confirmSetupPasscode}
+                      onChange={(e) => setConfirmSetupPasscode(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all text-center tracking-widest font-mono text-slate-800"
+                      required
+                    />
+                  </div>
+
+                  {setupError && (
+                    <div className="p-3 bg-rose-50 text-rose-600 border border-rose-100 text-xs rounded-xl font-medium flex items-center gap-2 text-left">
+                      <span className="h-1.5 w-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                      <span>{setupError}</span>
+                    </div>
+                  )}
+
+                  {setupSuccess && (
+                    <div className="p-3 bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs rounded-xl font-medium flex items-center gap-2 text-left">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+                      <span>{setupSuccess}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={settingUp}
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors shadow-md flex items-center justify-center gap-2"
+                  >
+                    {settingUp ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin text-white" /> Configuring Security...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" /> Save & Initialize Access
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {!isAuthenticated && isPasscodeConfigured === true && (
+              <div className="max-w-md mx-auto my-12 bg-white rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden p-8 flex flex-col items-center text-center animate-fade-in">
+                <div className="p-4 bg-amber-50 text-amber-600 rounded-2xl border border-amber-100 mb-6">
+                  <Lock className="h-8 w-8" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900 uppercase tracking-tight">
+                  Document Controller Login
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 mb-6 font-medium">
+                  Bin Lahej General Maintenance & Contracting LLC
+                </p>
+                <div className="w-full bg-slate-50/50 p-4 rounded-2xl border border-slate-100 mb-6 text-left">
+                  <p className="text-2xs text-slate-400 font-mono font-bold uppercase tracking-wider mb-1">Security Notice</p>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Access to separate daily/monthly ledger records, labor code registry, and database search is restricted to authorized Document Controllers only.
+                  </p>
+                </div>
+                <form onSubmit={handleLogin} className="w-full space-y-4">
+                  <div className="text-left">
+                    <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Enter Security Passcode
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        placeholder="•••••"
+                        value={passcode}
+                        onChange={(e) => setPasscode(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all text-center tracking-widest font-mono text-slate-800"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+
+                  {authError && (
+                    <div className="p-3 bg-rose-50 text-rose-600 border border-rose-100 text-xs rounded-xl font-medium flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                      <span>{authError}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={checkingAuth}
+                    className="w-full py-3 bg-[#0F172A] hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors shadow-md flex items-center justify-center gap-2"
+                  >
+                    {checkingAuth ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin text-white" /> Verifying...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" /> Authenticate Access
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {isAuthenticated && (
+              <div id="admin-authenticated-panel" className="space-y-6">
+                {/* Elegant Sub-navigation for Console Views */}
+                <div className="flex justify-between items-center border-b border-slate-200/80 mb-4 bg-white p-2 rounded-xl shadow-2xs flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      id="tab-ledger"
+                      onClick={() => setAdminTab("ledger")}
+                      className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                        adminTab === "ledger"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                      }`}
+                    >
+                      <FileSpreadsheet className="h-4 w-4" /> Ledger Logs Database
+                    </button>
+                    <button
+                      id="tab-labor-codes"
+                      onClick={() => setAdminTab("labor_codes")}
+                      className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                        adminTab === "labor_codes"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                      }`}
+                    >
+                      <Key className="h-4 w-4" /> Manage Labor Codes System
+                    </button>
+                    <button
+                      id="tab-security"
+                      onClick={() => setAdminTab("security")}
+                      className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                        adminTab === "security"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                      }`}
+                    >
+                      <Lock className="h-4 w-4" /> Security Settings
+                    </button>
+                  </div>
+                  <button
+                    id="btn-signout"
+                    onClick={handleLogout}
+                    className="pb-2 pt-2 px-4 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                  >
+                    <LogOut className="h-4 w-4" /> Sign Out
+                  </button>
+                </div>
             
             {/* LOGS DASHBOARD ACTIVE VIEW */}
             {adminTab === "ledger" && (
@@ -2926,13 +3194,119 @@ export default function App() {
                         </div>
                       )}
                     </div>
-
                   </div>
                 )}
 
               </div>
             )}
 
+            {adminTab === "security" && (
+              <div id="security-settings" className="space-y-6 animate-fade-in">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-slate-50 text-slate-700 p-2.5 rounded-xl border border-slate-100">
+                      <Lock className="h-5 w-5 text-slate-700" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight flex flex-wrap items-center gap-2">
+                        <span>Security & Access Control Console</span>
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 font-bold tracking-normal uppercase">
+                          ● Active Protection
+                        </span>
+                      </h2>
+                      <p className="text-xs text-slate-400 font-mono">
+                        Manage security credentials and passcodes for the Document Controller database
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 max-w-xl mx-auto">
+                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-emerald-500" /> Update Security Passcode
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+                    Change the secure passcode for the Document Controller database. The updated passcode will immediately replace the old one in the Firebase database and must be used for future log ins.
+                  </p>
+
+                  <form onSubmit={handlePasscodeChange} className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Current Passcode
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••"
+                        value={currentChangePasscode}
+                        onChange={(e) => setCurrentChangePasscode(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all font-mono tracking-widest text-slate-800"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        New Passcode (Min. 4 characters)
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••"
+                        value={newChangePasscode}
+                        onChange={(e) => setNewChangePasscode(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all font-mono tracking-widest text-slate-800"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Confirm New Passcode
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••"
+                        value={confirmChangePasscode}
+                        onChange={(e) => setConfirmChangePasscode(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all font-mono tracking-widest text-slate-800"
+                        required
+                      />
+                    </div>
+
+                    {changePasscodeError && (
+                      <div className="p-3 bg-rose-50 text-rose-600 border border-rose-100 text-xs rounded-xl font-medium flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                        <span>{changePasscodeError}</span>
+                      </div>
+                    )}
+
+                    {changePasscodeSuccess && (
+                      <div className="p-3 bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs rounded-xl font-medium flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+                        <span>{changePasscodeSuccess}</span>
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={changingPasscode}
+                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors shadow-sm flex items-center justify-center gap-2"
+                    >
+                      {changingPasscode ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Updating Passcode...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="h-3.5 w-3.5" /> Save Security Passcode
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+              </div>
+            )}
           </div>
         )}
 
