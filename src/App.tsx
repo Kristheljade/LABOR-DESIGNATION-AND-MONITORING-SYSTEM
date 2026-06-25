@@ -28,7 +28,8 @@ import {
   UserCheck,
   Check,
   X,
-  Edit
+  Edit,
+  Eye
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -476,6 +477,32 @@ export default function App() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
   const [logsError, setLogsError] = useState<string>("");
+
+  // Separate Daily & Monthly files state
+  const [ledgerFiles, setLedgerFiles] = useState<{ daily: any[]; monthly: any[] }>({ daily: [], monthly: [] });
+  const [isLoadingLedgerFiles, setIsLoadingLedgerFiles] = useState<boolean>(false);
+  const [ledgerFilesError, setLedgerFilesError] = useState<string>("");
+
+  // State for viewing/inspecting a specific daily/monthly ledger file
+  const [activeViewFile, setActiveViewFile] = useState<{
+    isOpen: boolean;
+    type: "daily" | "monthly";
+    filename: string;
+    date: string;
+    records: Submission[];
+    isLoading: boolean;
+    error: string;
+    searchTerm: string;
+  }>({
+    isOpen: false,
+    type: "daily",
+    filename: "",
+    date: "",
+    records: [],
+    isLoading: false,
+    error: "",
+    searchTerm: "",
+  });
 
   // Labor Codes system state
   const [laborCodes, setLaborCodes] = useState<any[]>([]);
@@ -1075,6 +1102,8 @@ export default function App() {
           laborCode: "",
         }));
         setMatchedLaborName("");
+        // Also refresh the separate daily and monthly ledger files list in the background
+        fetchLedgerFiles();
       } else {
         const errorData = await res.json();
         setSubmitError(errorData.error || "Failed to submit entry. Please try again.");
@@ -1096,6 +1125,8 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setSubmissions(data);
+        // Also load the separate daily and monthly files
+        fetchLedgerFiles();
       } else {
         setLogsError("Error retrieving database log sheet entries from server.");
       }
@@ -1103,6 +1134,207 @@ export default function App() {
       setLogsError("Error loading logs from server.");
     } finally {
       setIsLoadingLogs(false);
+    }
+  };
+
+  const fetchLedgerFiles = async () => {
+    setIsLoadingLedgerFiles(true);
+    setLedgerFilesError("");
+    try {
+      const res = await fetch("/api/ledger-files");
+      if (res.ok) {
+        const data = await res.json();
+        setLedgerFiles(data);
+      } else {
+        setLedgerFilesError("Failed to load separate daily and monthly ledger files from server.");
+      }
+    } catch (err) {
+      setLedgerFilesError("Network error loading ledger files.");
+    } finally {
+      setIsLoadingLedgerFiles(false);
+    }
+  };
+
+  // Helper to export specific records as a beautifully styled PDF document
+  const exportSpecificRecordsToPDF = async (records: Submission[], title: string, pdfFilename: string) => {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const autoTableFn = autoTableModule.default;
+
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "mm",
+        format: "a4"
+      });
+
+      // Header Brand bar styling
+      doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
+      doc.rect(0, 0, 297, 40, "F");
+
+      // Corporate Header Texts
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 14);
+
+      doc.setFont("Helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(203, 213, 225); // slate-300
+      doc.text("LABOR MONITORING & DESIGNATION SYSTEM", 15, 22);
+      doc.text("DOCUMENT CONTROLLER SECURE LEDGER LOGS", 15, 27);
+
+      doc.setFont("Helvetica", "italic");
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.text("System Record Clerk: KRISTHEL JADE OCDE", 15, 34);
+
+      // Section label inside white canvas
+      doc.setTextColor(15, 23, 42); // slate-900
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text(title.toUpperCase(), 15, 52);
+
+      // Accent separator line
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.setLineWidth(0.5);
+      doc.line(15, 55, 282, 55);
+
+      // Ledger metadata info block
+      doc.setFontSize(8.5);
+      doc.setFont("Helvetica", "normal");
+      doc.text(`Generated Date: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`, 15, 62);
+      doc.text(`Total Records Included: ${records.length}`, 15, 67);
+
+      // Setup table parameters
+      const tableColumns = [
+        "DATE",
+        "PROJECT",
+        "LABOR'S NAME",
+        "TRADE / DESIGNATION",
+        "SITE LOCATION",
+        "SITE ENGINEER",
+        "ASSIGNED TASK"
+      ];
+
+      const tableRows = records.map((s) => [
+        s.date,
+        s.project || "-",
+        s.laborsName || "-",
+        s.designation || "-",
+        s.projectLocation || "-",
+        s.siteEngineer || "-",
+        s.reassignedTask || "-"
+      ]);
+
+      const tableOptions = {
+        head: [tableColumns],
+        body: tableRows,
+        startY: 74,
+        theme: "striped" as const,
+        headStyles: {
+          fillColor: [15, 23, 42] as [number, number, number], // slate-900 (#0F172A)
+          textColor: [255, 255, 255] as [number, number, number],
+          fontSize: 8,
+          fontStyle: "bold" as const,
+          halign: "left" as const
+        },
+        bodyStyles: {
+          fontSize: 8,
+          textColor: [51, 65, 85] as [number, number, number] // slate-700
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252] as [number, number, number] // slate-50
+        },
+        columnStyles: {
+          0: { cellWidth: 24 }, // Date
+          1: { cellWidth: 46 }, // Project
+          2: { cellWidth: 46 }, // Labor Name
+          3: { cellWidth: 36 }, // Trade/Designation
+          4: { cellWidth: 35 }, // Location
+          5: { cellWidth: 35 }, // Engineer
+          6: { cellWidth: 45 }  // Assigned Task
+        },
+        styles: {
+          cellPadding: 2.5,
+          lineColor: [226, 232, 240] as [number, number, number], // slate-200
+          lineWidth: 0.1,
+          font: "Helvetica"
+        },
+        margin: { left: 15, right: 15 }
+      };
+
+      if (typeof autoTableFn === "function") {
+        autoTableFn(doc, tableOptions);
+      } else if (typeof (doc as any).autoTable === "function") {
+        (doc as any).autoTable(tableOptions);
+      } else {
+        throw new Error("jsPDF AutoTable is not correctly initialized.");
+      }
+
+      doc.save(pdfFilename);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      alert("Encountered an issue compiling the PDF document. Please refresh or try again.");
+    }
+  };
+
+  // View individual ledger file and populate into view modal/slider state
+  const handleViewLedgerFile = async (type: "daily" | "monthly", filename: string, date: string) => {
+    setActiveViewFile({
+      isOpen: true,
+      type,
+      filename,
+      date,
+      records: [],
+      isLoading: true,
+      error: "",
+      searchTerm: "",
+    });
+
+    try {
+      const res = await fetch(`/api/ledger-files/view/${type}/${filename}`);
+      if (res.ok) {
+        const records = await res.json();
+        setActiveViewFile(prev => ({
+          ...prev,
+          records,
+          isLoading: false
+        }));
+      } else {
+        const errText = await res.text();
+        setActiveViewFile(prev => ({
+          ...prev,
+          isLoading: false,
+          error: `Error loading records: ${errText || "unauthorized or server error"}`
+        }));
+      }
+    } catch (err) {
+      setActiveViewFile(prev => ({
+        ...prev,
+        isLoading: false,
+        error: "Network error loading ledger records."
+      }));
+    }
+  };
+
+  // Instantly download ledger file as PDF
+  const handleDownloadFileAsPDF = async (type: "daily" | "monthly", filename: string, date: string) => {
+    try {
+      const res = await fetch(`/api/ledger-files/view/${type}/${filename}`);
+      if (res.ok) {
+        const records = await res.json();
+        const formattedTitle = type === "daily" 
+          ? `DAILY LEDGER RECORDS FOR ${date}`
+          : `MONTHLY LEDGER RECORDS FOR ${date}`;
+        const pdfName = filename.replace(".json", ".pdf");
+        await exportSpecificRecordsToPDF(records, formattedTitle, pdfName);
+        showNotification("Success", `${pdfName} downloaded successfully.`, "success");
+      } else {
+        showNotification("Error", "Could not fetch records to generate PDF.", "error");
+      }
+    } catch (err) {
+      showNotification("Error", "Network error while compiling PDF.", "error");
     }
   };
 
@@ -1121,6 +1353,7 @@ export default function App() {
           if (res.ok) {
             setSubmissions(prev => prev.filter((s) => s.id !== id));
             showNotification("Success", "Record deleted successfully.", "success");
+            fetchLedgerFiles();
           } else {
             showNotification("Error", "Delete operation failed. Please refresh and try again.", "error");
           }
@@ -1804,6 +2037,206 @@ export default function App() {
                     </div>
                   </div>
 
+                </div>
+
+                {/* Separate Daily & Monthly Ledger Files Panel */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Daily Records Column */}
+                  <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm flex flex-col h-[380px]">
+                    <div className="flex items-center justify-between mb-4 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-5 w-5 text-rose-500" />
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Daily Ledger Records</h3>
+                          <p className="text-[10px] text-slate-400 font-mono">Individual files per day (JSON & CSV)</p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono font-bold bg-rose-50 text-rose-600 px-2.5 py-0.5 rounded-full border border-rose-100 uppercase">
+                        {ledgerFiles.daily?.length || 0} Days
+                      </span>
+                    </div>
+
+                    {isLoadingLedgerFiles ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs">
+                        <RefreshCw className="h-6 w-6 animate-spin text-slate-300 mb-2" />
+                        Scanning daily directory...
+                      </div>
+                    ) : !ledgerFiles.daily || ledgerFiles.daily.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs text-center p-4 border border-dashed border-slate-100 rounded-2xl bg-slate-50/20">
+                        <FileSpreadsheet className="h-8 w-8 text-slate-200 mb-2" />
+                        <span>No daily files generated yet.<br />Submit logs to create records automatically.</span>
+                      </div>
+                    ) : (
+                      <div className="flex-1 overflow-y-auto pr-1 space-y-3">
+                        {ledgerFiles.daily.map((file) => {
+                          const formattedDate = (() => {
+                            try {
+                              const d = new Date(file.date);
+                              return d.toLocaleDateString('en-US', { 
+                                weekday: 'short',
+                                year: 'numeric', 
+                                month: 'short', 
+                                day: 'numeric' 
+                              });
+                            } catch {
+                              return file.date;
+                            }
+                          })();
+
+                          return (
+                            <div key={file.filename} className="p-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-100 hover:border-slate-200/85 rounded-2xl transition-all flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <span className="text-xs font-bold text-slate-700 block truncate">
+                                  {formattedDate}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400 block mt-0.5 truncate">
+                                  {file.filename}
+                                </span>
+                                <div className="flex items-center gap-2 mt-1.5">
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100 font-mono">
+                                    {file.recordCount} {file.recordCount === 1 ? 'record' : 'records'}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-slate-400">
+                                    {(file.size / 1024).toFixed(2)} KB
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 shrink-0 items-center">
+                                <button
+                                  onClick={() => handleViewLedgerFile("daily", file.filename, file.date)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 hover:border-indigo-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="View records of this day directly in screen"
+                                >
+                                  <Eye className="h-3 w-3 text-indigo-600" /> View
+                                </button>
+                                <button
+                                  onClick={() => handleDownloadFileAsPDF("daily", file.filename, file.date)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 hover:border-rose-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="Export this day as a clean PDF document"
+                                >
+                                  <FileText className="h-3 w-3 text-rose-600" /> PDF
+                                </button>
+                                <a
+                                  href={`${file.path}?format=csv`}
+                                  download
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 hover:border-emerald-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="Download as CSV file for Microsoft Excel"
+                                >
+                                  <FileSpreadsheet className="h-3 w-3 text-emerald-600" /> CSV
+                                </a>
+                                <a
+                                  href={`${file.path}?format=json`}
+                                  download
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 hover:border-slate-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="Download raw JSON database backup file"
+                                >
+                                  <Download className="h-3 w-3 text-slate-500" /> JSON
+                                </a>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Monthly Records Column */}
+                  <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm flex flex-col h-[380px]">
+                    <div className="flex items-center justify-between mb-4 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-5 w-5 text-indigo-500" />
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Monthly Ledger Records</h3>
+                          <p className="text-[10px] text-slate-400 font-mono">Roll-up files per month (JSON & CSV)</p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono font-bold bg-indigo-50 text-indigo-600 px-2.5 py-0.5 rounded-full border border-indigo-100 uppercase">
+                        {ledgerFiles.monthly?.length || 0} Months
+                      </span>
+                    </div>
+
+                    {isLoadingLedgerFiles ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs">
+                        <RefreshCw className="h-6 w-6 animate-spin text-slate-300 mb-2" />
+                        Scanning monthly directory...
+                      </div>
+                    ) : !ledgerFiles.monthly || ledgerFiles.monthly.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-xs text-center p-4 border border-dashed border-slate-100 rounded-2xl bg-slate-50/20">
+                        <FileSpreadsheet className="h-8 w-8 text-slate-200 mb-2" />
+                        <span>No monthly files generated yet.<br />Submit logs to create records automatically.</span>
+                      </div>
+                    ) : (
+                      <div className="flex-1 overflow-y-auto pr-1 space-y-3">
+                        {ledgerFiles.monthly.map((file) => {
+                          const formattedMonth = (() => {
+                            try {
+                              const [year, month] = file.date.split("-");
+                              const d = new Date(parseInt(year), parseInt(month) - 1, 1);
+                              return d.toLocaleDateString('en-US', { 
+                                year: 'numeric', 
+                                month: 'long' 
+                              });
+                            } catch {
+                              return file.date;
+                            }
+                          })();
+
+                          return (
+                            <div key={file.filename} className="p-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-100 hover:border-slate-200/85 rounded-2xl transition-all flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <span className="text-xs font-bold text-slate-700 block truncate">
+                                  {formattedMonth}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400 block mt-0.5 truncate">
+                                  {file.filename}
+                                </span>
+                                <div className="flex items-center gap-2 mt-1.5">
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-100 font-mono">
+                                    {file.recordCount} {file.recordCount === 1 ? 'record' : 'records'}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-slate-400">
+                                    {(file.size / 1024).toFixed(2)} KB
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 shrink-0 items-center">
+                                <button
+                                  onClick={() => handleViewLedgerFile("monthly", file.filename, file.date)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 hover:border-indigo-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="View records of this month directly in screen"
+                                >
+                                  <Eye className="h-3 w-3 text-indigo-600" /> View
+                                </button>
+                                <button
+                                  onClick={() => handleDownloadFileAsPDF("monthly", file.filename, file.date)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 hover:border-rose-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="Export this month as a clean PDF document"
+                                >
+                                  <FileText className="h-3 w-3 text-rose-600" /> PDF
+                                </button>
+                                <a
+                                  href={`${file.path}?format=csv`}
+                                  download
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 hover:border-emerald-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="Download as CSV file for Microsoft Excel"
+                                >
+                                  <FileSpreadsheet className="h-3 w-3 text-emerald-600" /> CSV
+                                </a>
+                                <a
+                                  href={`${file.path}?format=json`}
+                                  download
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 hover:border-slate-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
+                                  title="Download raw JSON database backup file"
+                                >
+                                  <Download className="h-3 w-3 text-slate-500" /> JSON
+                                </a>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Database Search & Filters Control Panel */}
@@ -2608,6 +3041,217 @@ export default function App() {
           >
             ×
           </button>
+        </div>
+      )}
+
+      {/* SEPARATE LEDGER RECORD VIEWER MODAL */}
+      {activeViewFile.isOpen && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center p-4 sm:p-6 md:p-10 bg-slate-900/75 backdrop-blur-md animate-fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-6xl w-full h-[90vh] md:h-[85vh] flex flex-col overflow-hidden transform scale-100 transition-all animate-slide-in">
+            
+            {/* Modal Header */}
+            <div className="bg-[#0F172A] p-5 md:p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-2xl ${activeViewFile.type === "daily" ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"}`}>
+                  {activeViewFile.type === "daily" ? <Calendar className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2">
+                    {activeViewFile.type === "daily" ? "Daily Ledger Records" : "Monthly Ledger Records"}
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${activeViewFile.type === "daily" ? "bg-rose-950 text-rose-400 border-rose-800" : "bg-indigo-950 text-indigo-400 border-indigo-800"}`}>
+                      {activeViewFile.date}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5 truncate max-w-md">
+                    File: {activeViewFile.filename}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action buttons inside Modal Header */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    const formattedTitle = activeViewFile.type === "daily" 
+                      ? `DAILY LEDGER LOG FOR ${activeViewFile.date}`
+                      : `MONTHLY LEDGER LOG FOR ${activeViewFile.date}`;
+                    const pdfName = activeViewFile.filename.replace(".json", ".pdf");
+                    exportSpecificRecordsToPDF(activeViewFile.records, formattedTitle, pdfName);
+                  }}
+                  disabled={activeViewFile.isLoading || activeViewFile.records.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                >
+                  <FileText className="h-3.5 w-3.5" /> Export PDF
+                </button>
+                <a
+                  href={`/api/ledger-files/download/${activeViewFile.type}/${activeViewFile.filename}?format=csv`}
+                  download
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" /> Export CSV
+                </a>
+                <a
+                  href={`/api/ledger-files/download/${activeViewFile.type}/${activeViewFile.filename}?format=json`}
+                  download
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                >
+                  <Download className="h-3.5 w-3.5" /> Export JSON
+                </a>
+                <button
+                  onClick={() => setActiveViewFile(prev => ({ ...prev, isOpen: false }))}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                  title="Close viewer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 p-5 md:p-6">
+              
+              {activeViewFile.isLoading ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+                  <RefreshCw className="h-10 w-10 animate-spin text-indigo-500 mb-3" />
+                  <span className="font-bold text-slate-700">Fetching records...</span>
+                  <span className="text-xs text-slate-400 mt-1 font-mono">Parsing JSON payload from secure ledger storage...</span>
+                </div>
+              ) : activeViewFile.error ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-rose-500 p-6 border border-dashed border-rose-200 rounded-2xl bg-rose-50/50">
+                  <AlertCircle className="h-12 w-12 text-rose-400 mb-3" />
+                  <span className="font-bold text-rose-700">{activeViewFile.error}</span>
+                  <button
+                    onClick={() => handleViewLedgerFile(activeViewFile.type, activeViewFile.filename, activeViewFile.date)}
+                    className="mt-4 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer"
+                  >
+                    Retry Loading
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Internal filter and metadata summary bar */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col sm:flex-row gap-3 items-center justify-between mb-4 shrink-0">
+                    <div className="relative w-full sm:max-w-xs">
+                      <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search records in this file..."
+                        value={activeViewFile.searchTerm}
+                        onChange={(e) => setActiveViewFile(prev => ({ ...prev, searchTerm: e.target.value }))}
+                        className="w-full bg-slate-50/80 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/25 focus:bg-white transition-all text-slate-800"
+                      />
+                      {activeViewFile.searchTerm && (
+                        <button
+                          onClick={() => setActiveViewFile(prev => ({ ...prev, searchTerm: "" }))}
+                          className="absolute right-3 top-2 text-slate-400 hover:text-slate-600 font-bold"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                      <span className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full border border-slate-200">
+                        Total Sheet Rows: {activeViewFile.records.length}
+                      </span>
+                      {activeViewFile.searchTerm && (
+                        <span className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full border border-indigo-100">
+                          Filtered Matches: {
+                            activeViewFile.records.filter(r => 
+                              (r.laborsName || "").toLowerCase().includes(activeViewFile.searchTerm.toLowerCase()) ||
+                              (r.project || "").toLowerCase().includes(activeViewFile.searchTerm.toLowerCase()) ||
+                              (r.siteEngineer || "").toLowerCase().includes(activeViewFile.searchTerm.toLowerCase()) ||
+                              (r.designation || "").toLowerCase().includes(activeViewFile.searchTerm.toLowerCase()) ||
+                              (r.projectLocation || "").toLowerCase().includes(activeViewFile.searchTerm.toLowerCase()) ||
+                              (r.reassignedTask || "").toLowerCase().includes(activeViewFile.searchTerm.toLowerCase())
+                            ).length
+                          }
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Records Table View */}
+                  <div className="flex-1 bg-white border border-slate-200 rounded-2xl shadow-inner overflow-hidden flex flex-col">
+                    <div className="overflow-auto flex-1">
+                      <table className="w-full text-left border-collapse min-w-[800px]">
+                        <thead className="bg-[#0F172A] text-slate-200 sticky top-0 z-10 text-[10px] uppercase font-mono tracking-wider border-b border-slate-800">
+                          <tr>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">DATE</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">PROJECT</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">LABOR NAME</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">DESIGNATION</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">LOCATION</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">SITE ENGINEER</th>
+                            <th className="py-3 px-4 font-bold">ASSIGNED TASK</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs font-medium">
+                          {(() => {
+                            const filtered = activeViewFile.records.filter(r => {
+                              const s = activeViewFile.searchTerm.toLowerCase();
+                              if (!s) return true;
+                              return (
+                                (r.laborsName || "").toLowerCase().includes(s) ||
+                                (r.project || "").toLowerCase().includes(s) ||
+                                (r.siteEngineer || "").toLowerCase().includes(s) ||
+                                (r.designation || "").toLowerCase().includes(s) ||
+                                (r.projectLocation || "").toLowerCase().includes(s) ||
+                                (r.reassignedTask || "").toLowerCase().includes(s)
+                              );
+                            });
+
+                            if (filtered.length === 0) {
+                              return (
+                                <tr>
+                                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                                    No records found matching your file filter query.
+                                  </td>
+                                </tr>
+                              );
+                            }
+
+                            return filtered.map((r, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/55 transition-colors border-b border-slate-100">
+                                <td className="py-2.5 px-4 text-slate-500 font-mono whitespace-nowrap border-r border-slate-100">{r.date}</td>
+                                <td className="py-2.5 px-4 text-slate-800 font-bold uppercase border-r border-slate-100">{r.project}</td>
+                                <td className="py-2.5 px-4 text-slate-900 font-bold uppercase border-r border-slate-100">{r.laborsName}</td>
+                                <td className="py-2.5 px-4 text-slate-600 border-r border-slate-100">
+                                  <span className="bg-indigo-50 text-indigo-700 border border-indigo-100 text-[10px] px-2 py-0.5 rounded font-bold font-mono">
+                                    {r.designation}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-4 text-slate-600 uppercase border-r border-slate-100">{r.projectLocation || "-"}</td>
+                                <td className="py-2.5 px-4 text-slate-700 font-bold uppercase border-r border-slate-100">{r.siteEngineer}</td>
+                                <td className="py-2.5 px-4 text-slate-600 uppercase leading-relaxed max-w-xs truncate" title={r.reassignedTask}>
+                                  {r.reassignedTask}
+                                </td>
+                              </tr>
+                            ));
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {/* Modal Footer */}
+            <div className="bg-slate-100 px-6 py-4 flex items-center justify-between border-t border-slate-200/60 shrink-0">
+              <span className="text-[10px] text-slate-400 font-mono">
+                System: SECURE DOCUMENT CONTROLLER VIEWER ENGINE .
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveViewFile(prev => ({ ...prev, isOpen: false }))}
+                className="px-5 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-sm"
+              >
+                Close Viewer
+              </button>
+            </div>
+
+          </div>
         </div>
       )}
 

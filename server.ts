@@ -118,6 +118,64 @@ async function getSubmissions(): Promise<any[]> {
   }
 }
 
+async function syncSeparateFiles() {
+  try {
+    const submissions = await getSubmissions();
+    const LEDGER_DIR = path.join(process.cwd(), "ledger_records");
+    const DAILY_DIR = path.join(LEDGER_DIR, "daily");
+    const MONTHLY_DIR = path.join(LEDGER_DIR, "monthly");
+
+    // Ensure directories exist
+    if (!existsSync(LEDGER_DIR)) {
+      await fs.mkdir(LEDGER_DIR, { recursive: true });
+    }
+
+    // Clean out folders to prevent stale records
+    if (existsSync(DAILY_DIR)) {
+      await fs.rm(DAILY_DIR, { recursive: true, force: true });
+    }
+    await fs.mkdir(DAILY_DIR, { recursive: true });
+
+    if (existsSync(MONTHLY_DIR)) {
+      await fs.rm(MONTHLY_DIR, { recursive: true, force: true });
+    }
+    await fs.mkdir(MONTHLY_DIR, { recursive: true });
+
+    const dailyGroups: Record<string, any[]> = {};
+    const monthlyGroups: Record<string, any[]> = {};
+
+    for (const s of submissions) {
+      const sDate = s.date || "unknown";
+      const dayKey = sDate.trim(); // e.g., "2026-06-25"
+      const monthKey = sDate.length >= 7 ? sDate.substring(0, 7) : "unknown"; // e.g., "2026-06"
+
+      if (!dailyGroups[dayKey]) dailyGroups[dayKey] = [];
+      dailyGroups[dayKey].push(s);
+
+      if (!monthlyGroups[monthKey]) monthlyGroups[monthKey] = [];
+      monthlyGroups[monthKey].push(s);
+    }
+
+    for (const [day, list] of Object.entries(dailyGroups)) {
+      if (day === "unknown") continue;
+      list.sort((a, b) => (a.laborsName || "").localeCompare(b.laborsName || ""));
+      const filePath = path.join(DAILY_DIR, `entries_daily_${day}.json`);
+      await fs.writeFile(filePath, JSON.stringify(list, null, 2), "utf-8");
+    }
+
+    for (const [month, list] of Object.entries(monthlyGroups)) {
+      if (month === "unknown") continue;
+      list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || (a.laborsName || "").localeCompare(b.laborsName || ""));
+      const filePath = path.join(MONTHLY_DIR, `entries_monthly_${month}.json`);
+      await fs.writeFile(filePath, JSON.stringify(list, null, 2), "utf-8");
+    }
+
+    console.log("Successfully synchronized separate daily and monthly ledger records on server.");
+  } catch (err) {
+    console.error("Error in syncSeparateFiles:", err);
+  }
+}
+
 const ADMIN_PASSCODE = process.env.ADMIN_PASSPHRASE || "123456";
 
 // Get admin passcode
@@ -485,6 +543,9 @@ app.post("/api/submissions", async (req, res) => {
       console.error("Failed to write to local storage backup:", localError);
     }
 
+    // Refresh the daily/monthly separate files
+    await syncSeparateFiles();
+
     res.status(201).json({ success: true, entry: { id, ...newSubmission }, storedInFirebase: firebaseSuccess });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -535,7 +596,157 @@ app.delete("/api/submissions/:id", requireAdmin, async (req, res) => {
       console.error("Failed to update local storage backup during deletion:", localError);
     }
 
+    // Refresh the daily/monthly separate files
+    await syncSeparateFiles();
+
     res.json({ success: true, deletedFromFirebase: firebaseSuccess });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List all separate daily and monthly ledger files (Admin only)
+app.get("/api/ledger-files", requireAdmin, async (req, res) => {
+  try {
+    await syncSeparateFiles();
+
+    const LEDGER_DIR = path.join(process.cwd(), "ledger_records");
+    const DAILY_DIR = path.join(LEDGER_DIR, "daily");
+    const MONTHLY_DIR = path.join(LEDGER_DIR, "monthly");
+
+    const dailyFilesList: any[] = [];
+    const monthlyFilesList: any[] = [];
+
+    if (existsSync(DAILY_DIR)) {
+      const files = await fs.readdir(DAILY_DIR);
+      for (const f of files) {
+        if (f.endsWith(".json")) {
+          const filePath = path.join(DAILY_DIR, f);
+          const stats = await fs.stat(filePath);
+          const content = await fs.readFile(filePath, "utf-8");
+          const records = JSON.parse(content || "[]");
+          const datePart = f.replace("entries_daily_", "").replace(".json", "");
+
+          dailyFilesList.push({
+            filename: f,
+            type: "daily",
+            date: datePart,
+            size: stats.size,
+            recordCount: records.length,
+            path: `/api/ledger-files/download/daily/${f}`
+          });
+        }
+      }
+    }
+
+    if (existsSync(MONTHLY_DIR)) {
+      const files = await fs.readdir(MONTHLY_DIR);
+      for (const f of files) {
+        if (f.endsWith(".json")) {
+          const filePath = path.join(MONTHLY_DIR, f);
+          const stats = await fs.stat(filePath);
+          const content = await fs.readFile(filePath, "utf-8");
+          const records = JSON.parse(content || "[]");
+          const monthPart = f.replace("entries_monthly_", "").replace(".json", "");
+
+          monthlyFilesList.push({
+            filename: f,
+            type: "monthly",
+            date: monthPart,
+            size: stats.size,
+            recordCount: records.length,
+            path: `/api/ledger-files/download/monthly/${f}`
+          });
+        }
+      }
+    }
+
+    dailyFilesList.sort((a, b) => b.date.localeCompare(a.date));
+    monthlyFilesList.sort((a, b) => b.date.localeCompare(a.date));
+
+    res.json({
+      daily: dailyFilesList,
+      monthly: monthlyFilesList
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download separate daily/monthly ledger file (Admin only)
+app.get("/api/ledger-files/download/:type/:filename", requireAdmin, async (req, res) => {
+  try {
+    const { type, filename } = req.params;
+    const format = req.query.format === "csv" ? "csv" : "json";
+
+    if (type !== "daily" && type !== "monthly") {
+      return res.status(400).send("Invalid ledger type");
+    }
+
+    const dir = type === "daily" ? "daily" : "monthly";
+    const filePath = path.join(process.cwd(), "ledger_records", dir, filename);
+
+    if (!existsSync(filePath)) {
+      return res.status(404).send("File not found");
+    }
+
+    if (format === "json") {
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      return res.sendFile(filePath);
+    } else {
+      const content = await fs.readFile(filePath, "utf-8");
+      const records = JSON.parse(content || "[]");
+
+      records.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      const BOM = "\uFEFF";
+      let csvContent = BOM + '"DATE","PROJECT","LABORS NAME","DESIGNATION","PROJECT LOCATION","SITE ENGINEER","REASSIGNED TASK"\n';
+
+      for (const s of records) {
+        const row = [
+          s.date,
+          s.project,
+          s.laborsName,
+          s.designation,
+          s.projectLocation,
+          s.siteEngineer,
+          s.reassignedTask
+        ].map(val => {
+          const clean = (val || "").replace(/"/g, '""');
+          return `"${clean}"`;
+        }).join(",");
+        csvContent += row + "\n";
+      }
+
+      const csvFilename = filename.replace(".json", ".csv");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${csvFilename}"`);
+      return res.send(csvContent);
+    }
+  } catch (error: any) {
+    res.status(500).send("Error downloading file: " + error.message);
+  }
+});
+
+// View separate daily/monthly ledger file records (Admin only)
+app.get("/api/ledger-files/view/:type/:filename", requireAdmin, async (req, res) => {
+  try {
+    const { type, filename } = req.params;
+    if (type !== "daily" && type !== "monthly") {
+      return res.status(400).json({ error: "Invalid ledger type" });
+    }
+
+    const dir = type === "daily" ? "daily" : "monthly";
+    const filePath = path.join(process.cwd(), "ledger_records", dir, filename);
+
+    if (!existsSync(filePath)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const content = await fs.readFile(filePath, "utf-8");
+    const records = JSON.parse(content || "[]");
+    res.json(records);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -578,6 +789,13 @@ app.get("/api/export", requireAdmin, async (req, res) => {
 
 // Setup Vite or production build serving
 async function setupVite() {
+  // Sync separate daily and monthly ledger records on startup
+  try {
+    await syncSeparateFiles();
+  } catch (syncError) {
+    console.error("Failed to run initial syncSeparateFiles:", syncError);
+  }
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
