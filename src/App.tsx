@@ -130,6 +130,19 @@ const COMMON_ENGINEERS = ["ENGR. SHAMJAS", "ENGR. DAWIT", "ENGR. YONAS", "ENGR. 
 const DESIGNATIONS = ["CARPENTER", "HELPER", "STEEL FIXER", "MASON", "FOREMAN", "ELECTRICIAN", "PLUMBER", "TILE FIXER"];
 const COMMON_TASKS = ["HOUSEKEEPING", "STEEL FIXER", "CONCRETING", "EXCAVATION", "WALL MASONRY", "SCAFFOLDING", "CLEANING"];
 
+const DEFAULT_LABOR_CODES = [
+  { code: "BL001", name: "MUHAMMAD RAMZAN" },
+  { code: "BL002", name: "KARTAR SINGH" },
+  { code: "BL003", name: "ALEXIS SÁNCHEZ" },
+  { code: "BL004", name: "AHMED MANSUR" }
+];
+
+const DEFAULT_PROJECT_CODES = [
+  { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
+  { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
+  { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
+];
+
 // Beautiful, robust custom Searchable Dropdown with keyboard-friendly instant code/text matching
 interface SearchableDropdownProps {
   id: string;
@@ -144,6 +157,7 @@ interface SearchableDropdownProps {
   disabled?: boolean;
   allowCustom?: boolean;
   containerId?: string;
+  onlyDisplayValue?: boolean;
 }
 
 const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
@@ -159,6 +173,7 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
   disabled = false,
   allowCustom = false,
   containerId,
+  onlyDisplayValue = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"search" | "custom">("search");
@@ -247,12 +262,12 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
 
   // Find if there is a match to display its description beautifully
   const matchedOpt = options.find((o) => o.value.toUpperCase() === value.toUpperCase());
-  const showLabelDescription = matchedOpt && matchedOpt.label !== matchedOpt.value;
+  const showLabelDescription = matchedOpt && matchedOpt.label !== matchedOpt.value && !onlyDisplayValue;
 
   // Render the label to show in the closed state trigger field
   const displayValue = value
     ? matchedOpt
-      ? matchedOpt.label !== matchedOpt.value
+      ? matchedOpt.label !== matchedOpt.value && !onlyDisplayValue
         ? `${value} - ${matchedOpt.label}`
         : value
       : value
@@ -367,9 +382,9 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
                           }`}
                         >
                           <span className="font-mono text-xs font-bold text-slate-900">
-                            {opt.value} {opt.label !== opt.value ? `- ${opt.label}` : ""}
+                            {opt.value} {!onlyDisplayValue && opt.label !== opt.value ? `- ${opt.label}` : ""}
                           </span>
-                          {opt.sublabel && (
+                          {!onlyDisplayValue && opt.sublabel && (
                             <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider flex items-center gap-1 mt-0.5">
                               <MapPin className="h-2.5 w-2.5 text-slate-400" /> {opt.sublabel}
                             </span>
@@ -597,11 +612,12 @@ export default function App() {
   }, [isAuthenticated, currentView]);
 
   const handleLaborCodeChange = (codeVal: string) => {
-    const upperCode = codeVal.toUpperCase();
+    const upperCode = codeVal.toUpperCase().trim();
     setFormData(prev => ({ ...prev, laborCode: upperCode }));
     
     // Find matching labor code
-    const matched = laborCodes.find(lc => lc.code.toUpperCase() === upperCode.trim());
+    const combinedLaborCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+    const matched = combinedLaborCodes.find(lc => lc.code.toUpperCase() === upperCode);
     if (matched) {
       setMatchedLaborName(matched.name);
       setFormData(prev => ({ ...prev, laborsName: matched.name }));
@@ -611,10 +627,11 @@ export default function App() {
   };
 
   const handleProjectCodeChange = (codeVal: string) => {
-    const upperCode = codeVal.toUpperCase();
+    const upperCode = codeVal.toUpperCase().trim();
     
     // Find matching project code
-    const matched = projectCodes.find(pc => pc.code.toUpperCase() === upperCode.trim());
+    const combinedProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+    const matched = combinedProjectCodes.find(pc => pc.code.toUpperCase() === upperCode);
     if (matched) {
       setFormData(prev => ({ 
         ...prev, 
@@ -1362,11 +1379,7 @@ export default function App() {
                         label="Project Code"
                         icon={<Briefcase className="h-3.5 w-3.5 text-slate-400" />}
                         placeholder="Search or enter Project Code..."
-                        options={(projectCodes.length > 0 ? projectCodes : [
-                          { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
-                          { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
-                          { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
-                        ]).map(pc => ({
+                        options={(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).map(pc => ({
                           value: pc.code,
                           label: pc.name,
                           sublabel: pc.location
@@ -1376,6 +1389,7 @@ export default function App() {
                         required
                         allowCustom
                         containerId="select-project-container"
+                        onlyDisplayValue
                       />
 
                       {/* PROJECT LOCATION */}
@@ -1386,24 +1400,12 @@ export default function App() {
                         <input
                           id="input-location"
                           type="text"
-                          placeholder={(projectCodes.length > 0 ? projectCodes : [
-                            { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
-                            { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
-                            { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
-                          ]).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim()) ? "Auto-filled from Project Code" : "Enter Site Location..."}
+                          placeholder={(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim()) ? "Auto-filled from Project Code" : "Enter Site Location..."}
                           value={formData.projectLocation}
                           onChange={(e) => setFormData(prev => ({ ...prev, projectLocation: e.target.value }))}
-                          readOnly={(projectCodes.length > 0 ? projectCodes : [
-                            { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
-                            { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
-                            { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
-                          ]).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())}
+                          readOnly={(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())}
                           className={`w-full border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none text-sm font-semibold transition-all uppercase ${
-                            (projectCodes.length > 0 ? projectCodes : [
-                              { code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST" },
-                              { code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH" },
-                              { code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND" }
-                            ]).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())
+                            (projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())
                               ? "bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200" 
                               : "bg-slate-50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
                           }`}
@@ -1438,12 +1440,7 @@ export default function App() {
                         label="Select Labor Code"
                         icon={<Key className="h-3.5 w-3.5 text-slate-400" />}
                         placeholder="Search or enter Labor Code..."
-                        options={(laborCodes.length > 0 ? laborCodes : [
-                          { code: "BL001", name: "MUHAMMAD RAMZAN" },
-                          { code: "BL002", name: "KARTAR SINGH" },
-                          { code: "BL003", name: "ALEXIS SÁNCHEZ" },
-                          { code: "BL004", name: "AHMED MANSUR" }
-                        ]).map(lc => ({
+                        options={(laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES).map(lc => ({
                           value: lc.code,
                           label: lc.name
                         }))}
@@ -1452,6 +1449,7 @@ export default function App() {
                         required
                         allowCustom
                         containerId="select-labor-code-container"
+                        onlyDisplayValue
                       />
                       {formData.laborCode && (
                         <div className="mt-2 text-right">
