@@ -2105,19 +2105,16 @@ export default function App() {
                           <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
                             Designation / Trade
                           </label>
-                          <select
+                          <input
                             id="new-labor-designation"
+                            type="text"
                             required
+                            list="designations-list"
+                            placeholder="e.g. CARPENTER, MASON..."
                             value={newLaborDesignation}
                             onChange={(e) => setNewLaborDesignation(e.target.value)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
-                          >
-                            {DESIGNATIONS.map((des) => (
-                              <option key={des} value={des}>
-                                {des}
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </div>
 
                         <button
@@ -2209,17 +2206,13 @@ export default function App() {
                                         />
                                       </td>
                                       <td className="py-1 px-3 border-r border-slate-200">
-                                        <select
+                                        <input
+                                          type="text"
+                                          list="designations-list"
                                           value={editLaborDesignation}
                                           onChange={(e) => setEditLaborDesignation(e.target.value.toUpperCase())}
-                                          className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs font-semibold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                                        >
-                                          {DESIGNATIONS.map((des) => (
-                                            <option key={des} value={des}>
-                                              {des}
-                                            </option>
-                                          ))}
-                                        </select>
+                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        />
                                       </td>
                                       <td className="py-1 px-3 text-center flex items-center justify-center gap-1.5 min-h-[38px]">
                                         <button
@@ -2617,6 +2610,12 @@ export default function App() {
           </button>
         </div>
       )}
+
+      <datalist id="designations-list">
+        {DESIGNATIONS.map((des) => (
+          <option key={des} value={des} />
+        ))}
+      </datalist>
 
     </div>
   );
