@@ -30,7 +30,8 @@ import {
   Check,
   X,
   Edit,
-  Eye
+  Eye,
+  Heart
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -3318,7 +3319,9 @@ export default function App() {
           <div className="text-center sm:text-left">
             <span className="font-semibold block text-slate-300">© 2026 BIN LAHEJ GENERAL MAINTENANCE L.L.C</span>
             <span className="text-slate-500">External labor log system data record log. All Rights Reserved.</span>
-            <span className="text-slate-500"> @ KRISTHEL JADE OCDE .</span>
+            <span className="text-slate-500 flex items-center justify-center sm:justify-start gap-1 mt-1">
+              This system Created By KRISTHEL JADE OCDE <Heart className="h-3.5 w-3.5 text-rose-500 fill-rose-500 animate-pulse inline" />
+            </span>
           </div>
           <div className="flex items-center gap-4">
             {currentView === "form" ? (
