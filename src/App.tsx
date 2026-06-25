@@ -161,40 +161,60 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
   containerId,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [activeTab, setActiveTab] = useState<"search" | "custom">("search");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [customInput, setCustomInput] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Sync searchTerm with the external value directly (no description appending for cleaner typing and backspacing)
-  useEffect(() => {
-    setSearchTerm(value);
-  }, [value]);
+  // Auto-set the appropriate tab and pre-fill inputs when dropdown opens
+  const handleToggleDropdown = () => {
+    if (readOnly || disabled) return;
+    
+    if (!isOpen) {
+      // Check if current value exists and matches a standard option
+      const matched = options.find((o) => o.value.toUpperCase() === value.toUpperCase());
+      
+      if (value && !matched && allowCustom) {
+        // It's a custom value
+        setActiveTab("custom");
+        setCustomInput(value);
+        setSearchQuery("");
+      } else {
+        // Predefined option or empty
+        setActiveTab("search");
+        setSearchQuery("");
+        setCustomInput("");
+      }
+    }
+    setIsOpen(!isOpen);
+  };
 
   // Click outside to close
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setIsOpen(false);
-        // On blur, if custom is NOT allowed, reset search term to matched value
-        if (!allowCustom) {
-          const option = options.find((o) => o.value.toUpperCase() === value.toUpperCase());
-          if (option) {
-            setSearchTerm(option.value);
-          } else {
-            setSearchTerm("");
-          }
-        }
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isOpen, value, options, allowCustom]);
+  }, [isOpen]);
 
-  // Filter options
-  const filtered = options.filter((o) => {
-    const term = searchTerm.toLowerCase().trim();
+  // Handle escape key to close
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Filter options based on search query inside the popover
+  const filteredOptions = options.filter((o) => {
+    const term = searchQuery.toLowerCase().trim();
     if (!term) return true;
-    // If the search term exactly equals the current state value, show all options on focus/click so they don't get restricted
-    if (term === value.toLowerCase().trim()) return true;
     return (
       o.value.toLowerCase().includes(term) ||
       o.label.toLowerCase().includes(term) ||
@@ -202,41 +222,41 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
     );
   });
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (readOnly || disabled) return;
-    const val = e.target.value;
-    setSearchTerm(val);
-    setIsOpen(true);
-
-    if (allowCustom) {
-      onChange(val);
-    } else {
-      // If they type a exact match to a code or label, select it immediately
-      const exactMatch = options.find(
-        (o) => o.value.toUpperCase() === val.toUpperCase().trim() || o.label.toUpperCase() === val.toUpperCase().trim()
-      );
-      if (exactMatch) {
-        onChange(exactMatch.value, exactMatch.data);
-      } else {
-        onChange("");
-      }
-    }
-  };
-
   const handleSelectOption = (opt: { value: string; label: string; data?: any }) => {
     onChange(opt.value, opt.data);
-    setSearchTerm(opt.value);
     setIsOpen(false);
   };
 
-  const handleInputFocus = () => {
-    if (readOnly || disabled) return;
-    setIsOpen(true);
+  const handleApplyCustom = () => {
+    const trimmed = customInput.trim();
+    if (trimmed) {
+      // Check if it matches an existing option (case-insensitive)
+      const matched = options.find(
+        (o) => o.value.toUpperCase() === trimmed.toUpperCase() || o.label.toUpperCase() === trimmed.toUpperCase()
+      );
+      if (matched) {
+        onChange(matched.value, matched.data);
+      } else {
+        onChange(trimmed.toUpperCase()); // default upper-cased for database consistency
+      }
+    } else {
+      onChange("");
+    }
+    setIsOpen(false);
   };
 
   // Find if there is a match to display its description beautifully
   const matchedOpt = options.find((o) => o.value.toUpperCase() === value.toUpperCase());
   const showLabelDescription = matchedOpt && matchedOpt.label !== matchedOpt.value;
+
+  // Render the label to show in the closed state trigger field
+  const displayValue = value
+    ? matchedOpt
+      ? matchedOpt.label !== matchedOpt.value
+        ? `${value} - ${matchedOpt.label}`
+        : value
+      : value
+    : "";
 
   return (
     <div id={containerId} className="flex flex-col relative" ref={containerRef}>
@@ -250,79 +270,155 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
           </span>
         )}
       </div>
+      
+      {/* Trigger Button - styled exactly like a text input but operates as a secure click target */}
       <div className="relative">
-        <input
-          id={id}
-          type="text"
-          placeholder={placeholder}
-          required={required}
-          readOnly={readOnly}
-          disabled={disabled}
-          value={searchTerm}
-
-          onChange={handleInputChange}
-          onFocus={handleInputFocus}
-          autoComplete="off"
-          className={`w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-3.5 pr-10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all ${
-            disabled ? "cursor-not-allowed opacity-50" : "cursor-text"
+        <button
+          type="button"
+          onClick={handleToggleDropdown}
+          disabled={disabled || readOnly}
+          className={`w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-3.5 pr-10 text-left text-sm font-semibold text-slate-800 transition-all flex items-center justify-between ${
+            disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-slate-100/30"
           } ${readOnly ? "bg-slate-100 text-slate-500 cursor-not-allowed" : ""}`}
-        />
-        {!readOnly && !disabled && (
-          <button
-            type="button"
-            onClick={() => setIsOpen(!isOpen)}
-            className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
-          >
-            <svg
-              className={`h-4 w-4 transform transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        )}
+        >
+          {displayValue ? (
+            <span className="truncate uppercase text-slate-800 font-bold">{displayValue}</span>
+          ) : (
+            <span className="text-slate-400 font-medium font-sans">{placeholder}</span>
+          )}
+          
+          {!readOnly && !disabled && (
+            <span className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 pointer-events-none">
+              <svg
+                className={`h-4 w-4 transform transition-transform duration-200 text-slate-400 ${isOpen ? "rotate-180" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </span>
+          )}
+        </button>
       </div>
 
       {isOpen && !readOnly && !disabled && (
-        <div className="absolute z-50 w-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto font-sans text-sm animate-fadeIn">
-          {filtered.length > 0 ? (
-            <div className="py-1">
-              {filtered.map((opt) => {
-                const isSelected = opt.value.toUpperCase() === value.toUpperCase();
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => handleSelectOption(opt)}
-                    className={`w-full text-left px-4 py-2 hover:bg-slate-50 transition-colors flex flex-col gap-0.5 ${
-                      isSelected ? "bg-slate-50 text-slate-900 font-bold" : "text-slate-700"
-                    }`}
-                  >
-                    <span className="font-mono text-xs font-bold text-slate-900">
-                      {opt.value} {opt.label !== opt.value ? `- ${opt.label}` : ""}
-                    </span>
-                    {opt.sublabel && (
-                      <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider flex items-center gap-1">
-                        <MapPin className="h-2.5 w-2.5" /> {opt.sublabel}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="px-4 py-3 text-xs text-slate-400 text-center font-medium">
-              {allowCustom ? (
-                <span className="font-mono text-slate-500">
-                  Press enter or leave to use custom: <strong className="text-slate-900">"{searchTerm}"</strong>
-                </span>
-              ) : (
-                "No matches found"
-              )}
-            </div>
-          )}
+        <div className="absolute z-50 w-full mt-1.5 bg-white border border-slate-200/90 rounded-2xl shadow-xl overflow-hidden font-sans text-sm animate-fadeIn flex flex-col max-h-[350px]">
+          
+          {/* Custom interactive Tab switcher */}
+          <div className="flex border-b border-slate-100 bg-slate-50/70 p-1 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveTab("search")}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                activeTab === "search"
+                  ? "bg-white text-slate-900 shadow-xs border border-slate-200/40"
+                  : "text-slate-400 hover:text-slate-700 hover:bg-slate-100/50"
+              }`}
+            >
+              <Search className="h-3.5 w-3.5" /> Search & Select
+            </button>
+            {allowCustom && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("custom")}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                  activeTab === "custom"
+                    ? "bg-white text-slate-900 shadow-xs border border-slate-200/40"
+                    : "text-slate-400 hover:text-slate-700 hover:bg-slate-100/50"
+                }`}
+              >
+                <PlusCircle className="h-3.5 w-3.5" /> Enter Custom
+              </button>
+            )}
+          </div>
+
+          {/* Tab contents */}
+          <div className="flex-1 overflow-hidden flex flex-col">
+            {activeTab === "search" ? (
+              <>
+                {/* Search query input box inside the dropdown list */}
+                <div className="p-2 border-b border-slate-100 bg-white flex-shrink-0">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder={`Search options...`}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-9 pr-3 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-500 transition-all"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                {/* Filtered options scrolling list */}
+                <div className="overflow-y-auto py-1 max-h-48 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+                  {filteredOptions.length > 0 ? (
+                    filteredOptions.map((opt) => {
+                      const isSelected = opt.value.toUpperCase() === value.toUpperCase();
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => handleSelectOption(opt)}
+                          className={`w-full text-left px-4 py-2.5 hover:bg-slate-50 transition-colors flex flex-col gap-0.5 border-b border-slate-50/50 cursor-pointer ${
+                            isSelected ? "bg-slate-50 text-slate-900 font-bold" : "text-slate-700"
+                          }`}
+                        >
+                          <span className="font-mono text-xs font-bold text-slate-900">
+                            {opt.value} {opt.label !== opt.value ? `- ${opt.label}` : ""}
+                          </span>
+                          {opt.sublabel && (
+                            <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider flex items-center gap-1 mt-0.5">
+                              <MapPin className="h-2.5 w-2.5 text-slate-400" /> {opt.sublabel}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="px-4 py-8 text-xs text-slate-400 text-center font-medium font-sans">
+                      No matching records found
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              /* Custom entry tab content */
+              <div className="p-4 bg-white flex flex-col gap-3 flex-shrink-0 animate-fadeIn">
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">
+                    Type Custom {label}
+                  </span>
+                  <input
+                    type="text"
+                    placeholder={`Type information...`}
+                    value={customInput}
+                    onChange={(e) => setCustomInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleApplyCustom();
+                      }
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-500 transition-all uppercase"
+                    autoFocus
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleApplyCustom}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer"
+                >
+                  Apply Selection
+                </button>
+                <p className="text-[9px] text-slate-400 font-mono text-center">
+                  Press Enter or click the button above to secure your custom input.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
