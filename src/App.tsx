@@ -1771,78 +1771,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* USER HOSTING & INTEGRATION GUIDE COMPONENT (Answers "where can I use/host this etc.") */}
-                <div id="hosting-guide" className="bg-slate-900 text-slate-100 rounded-xl p-6 shadow-lg border border-slate-800">
-                  <div className="flex items-center gap-2 border-b border-slate-800 pb-3 mb-4">
-                    <Info className="h-5 w-5 text-amber-400" />
-                    <h3 className="text-lg font-bold font-display uppercase tracking-wider text-white">
-                      Field Deployment &amp; Hosting Guide
-                    </h3>
-                  </div>
 
-                  <p className="text-sm text-slate-400 leading-relaxed mb-6">
-                    You requested information on what platforms or websites you can use to host this form so sub-contracted users can instantly submit from their phones on-site while keeping database records private to you. Here are the premium recommended options:
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    
-                    {/* OPTION 1 */}
-                    <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center gap-2 text-white font-bold mb-2">
-                          <div className="bg-amber-500/10 text-amber-400 p-1 rounded">
-                            <Layers className="h-4 w-4" />
-                          </div>
-                          <span>1. Google AI Studio (Current)</span>
-                        </div>
-                        <p className="text-xs text-slate-400 leading-relaxed">
-                          Your code is currently running live in a container on Google Cloud. Normal workers can access your form through the <strong>Shared App URL</strong> on any mobile phone, while you can view logs inside the <strong>Admin Console</strong>.
-                        </p>
-                      </div>
-                      <div className="mt-4 pt-3 border-t border-slate-900 text-3xs font-mono text-emerald-400">
-                        ✓ ALREADY INSTALLED &amp; SHARABLE
-                      </div>
-                    </div>
-
-                    {/* OPTION 2 */}
-                    <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center gap-2 text-white font-bold mb-2">
-                          <div className="bg-sky-500/10 text-sky-400 p-1 rounded">
-                            <Server className="h-4 w-4" />
-                          </div>
-                          <span>2. Railway / Render / Caprover</span>
-                        </div>
-                        <p className="text-xs text-slate-400 leading-relaxed">
-                          Incredibly easy, low-cost options for hosting full-stack node apps. You simply link your GitHub repository and it compiles and provisions a solid live URL with zero-config databases on top of standard solid container servers.
-                        </p>
-                      </div>
-                      <div className="mt-4 pt-3 border-t border-slate-900 text-3xs font-mono text-sky-400">
-                        ★ BEST FOR FULL CUSTOM FORMS
-                      </div>
-                    </div>
-
-                    {/* OPTION 3 */}
-                    <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center gap-2 text-white font-bold mb-2">
-                          <div className="bg-purple-500/10 text-purple-400 p-1 rounded">
-                            <Database className="h-4 w-4" />
-                          </div>
-                          <span>3. Google Sheets Integration</span>
-                        </div>
-                        <p className="text-xs text-slate-400 leading-relaxed">
-                          This code exports clean CSV excel tables. You can easily drag and drop your daily logs directly into Google Sheets or Microsoft Excel to instantly auto-generate your company labor log exactly like your upload images!
-                        </p>
-                      </div>
-                      <div className="mt-4 pt-3 border-t border-slate-900 text-3xs font-mono text-purple-400">
-                        ⚙ EASY EXCEL DIRECT FLUID SYNC
-                      </div>
-                    </div>
-
-                  </div>
-
-                </div>
               </div>
             )}
 
