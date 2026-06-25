@@ -163,10 +163,10 @@ async function getLaborCodes(): Promise<any[]> {
     if (!existsSync(CODES_FILE)) {
       // Default initial labor codes for standard seamless test
       const defaults = [
-        { id: "BL001", code: "BL001", name: "MUHAMMAD RAMZAN" },
-        { id: "BL002", code: "BL002", name: "KARTAR SINGH" },
-        { id: "BL003", code: "BL003", name: "ALEXIS SÁNCHEZ" },
-        { id: "BL004", code: "BL004", name: "AHMED MANSUR" }
+        { id: "BL001", code: "BL001", name: "MUHAMMAD RAMZAN", designation: "CARPENTER" },
+        { id: "BL002", code: "BL002", name: "KARTAR SINGH", designation: "HELPER" },
+        { id: "BL003", code: "BL003", name: "ALEXIS SÁNCHEZ", designation: "STEEL FIXER" },
+        { id: "BL004", code: "BL004", name: "AHMED MANSUR", designation: "MASON" }
       ];
       await fs.writeFile(CODES_FILE, JSON.stringify(defaults, null, 2), "utf-8");
       return defaults;
@@ -192,19 +192,21 @@ app.get("/api/labor-codes", async (req, res) => {
 // Create/Update labor code
 app.post("/api/labor-codes", async (req, res) => {
   try {
-    const { code, name } = req.body;
+    const { code, name, designation } = req.body;
     if (!code || !name) {
       return res.status(400).json({ error: "Code and Name are required." });
     }
 
     const cleanCode = code.trim().toUpperCase();
     const cleanName = name.trim().toUpperCase();
+    const cleanDesignation = designation ? designation.trim().toUpperCase() : "HELPER";
 
     const id = cleanCode; // Use uppercase code as ID to prevent duplicates
 
     const newCodeItem = {
       code: cleanCode,
       name: cleanName,
+      designation: cleanDesignation,
       createdAt: new Date().toISOString()
     };
 

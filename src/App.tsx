@@ -25,7 +25,10 @@ import {
   Key,
   Palette,
   Briefcase,
-  UserCheck
+  UserCheck,
+  Check,
+  X,
+  Edit
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -483,9 +486,16 @@ export default function App() {
   // New labor code inputs
   const [newLaborCode, setNewLaborCode] = useState("");
   const [newLaborName, setNewLaborName] = useState("");
+  const [newLaborDesignation, setNewLaborDesignation] = useState("HELPER");
   const [isSavingLaborCode, setIsSavingLaborCode] = useState(false);
   const [saveLaborCodeError, setSaveLaborCodeError] = useState("");
   const [laborCodeSearch, setLaborCodeSearch] = useState("");
+
+  // Editing state for Labor Mapping Ledger
+  const [editingLaborId, setEditingLaborId] = useState<string | null>(null);
+  const [editLaborCode, setEditLaborCode] = useState("");
+  const [editLaborName, setEditLaborName] = useState("");
+  const [editLaborDesignation, setEditLaborDesignation] = useState("HELPER");
 
   // Project Codes system state
   const [projectCodes, setProjectCodes] = useState<any[]>([]);
@@ -499,6 +509,12 @@ export default function App() {
   const [isSavingProjectCode, setIsSavingProjectCode] = useState(false);
   const [saveProjectCodeError, setSaveProjectCodeError] = useState("");
   const [projectCodeSearch, setProjectCodeSearch] = useState("");
+
+  // Editing state for Project Mapping Ledger
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editProjectCode, setEditProjectCode] = useState("");
+  const [editProjectName, setEditProjectName] = useState("");
+  const [editProjectLocation, setEditProjectLocation] = useState("");
   const [laborCodesSubTab, setLaborCodesSubTab] = useState<"labor_codes" | "project_codes">("labor_codes");
   
   // Table search and filters
@@ -620,7 +636,14 @@ export default function App() {
     const matched = combinedLaborCodes.find(lc => lc.code.toUpperCase() === upperCode);
     if (matched) {
       setMatchedLaborName(matched.name);
-      setFormData(prev => ({ ...prev, laborsName: matched.name }));
+      const laborDesignation = (matched.designation || "HELPER").toUpperCase().trim();
+      const isPredefined = DESIGNATIONS.includes(laborDesignation);
+      setFormData(prev => ({ 
+        ...prev, 
+        laborsName: matched.name,
+        designation: isPredefined ? laborDesignation : "OTHER",
+        customDesignation: isPredefined ? "" : laborDesignation
+      }));
     } else {
       setMatchedLaborName("");
     }
@@ -672,7 +695,7 @@ export default function App() {
   const handleSaveLaborCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newLaborCode.trim() || !newLaborName.trim()) {
-      setSaveLaborCodeError("Please fill in both fields.");
+      setSaveLaborCodeError("Please fill in all fields.");
       return;
     }
 
@@ -686,6 +709,7 @@ export default function App() {
         body: JSON.stringify({
           code: newLaborCode.trim().toUpperCase(),
           name: newLaborName.trim().toUpperCase(),
+          designation: newLaborDesignation.trim().toUpperCase(),
         }),
       });
 
@@ -697,6 +721,8 @@ export default function App() {
         });
         setNewLaborCode("");
         setNewLaborName("");
+        setNewLaborDesignation("HELPER");
+        showNotification("Success", "Labor code mapping saved successfully.", "success");
       } else {
         const errorData = await res.json();
         setSaveLaborCodeError(errorData.error || "Failed to save code mapping.");
@@ -799,6 +825,94 @@ export default function App() {
         }
       }
     });
+  };
+
+  const handleUpdateLaborCode = async (id: string) => {
+    if (!editLaborName.trim()) {
+      showNotification("Error", "Labor name cannot be empty.", "error");
+      return;
+    }
+
+    try {
+      const oldCode = id;
+      const cleanNewCode = editLaborCode.trim().toUpperCase();
+      const cleanNewName = editLaborName.trim().toUpperCase();
+      const cleanNewDesignation = editLaborDesignation.trim().toUpperCase();
+
+      if (cleanNewCode !== oldCode) {
+        await fetch(`/api/labor-codes/${oldCode}`, { method: "DELETE" });
+      }
+
+      const res = await fetch("/api/labor-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: cleanNewCode,
+          name: cleanNewName,
+          designation: cleanNewDesignation
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setLaborCodes(prev => {
+          let filtered = prev.filter(c => c.id !== oldCode);
+          filtered = filtered.filter(c => c.id !== data.entry.id && c.code !== data.entry.code);
+          return [...filtered, data.entry];
+        });
+        setEditingLaborId(null);
+        showNotification("Success", "Labor mapping updated successfully.", "success");
+      } else {
+        const errData = await res.json();
+        showNotification("Error", errData.error || "Failed to update labor mapping.", "error");
+      }
+    } catch (err) {
+      showNotification("Error", "Network error while updating labor mapping.", "error");
+    }
+  };
+
+  const handleUpdateProjectCode = async (id: string) => {
+    if (!editProjectName.trim() || !editProjectLocation.trim()) {
+      showNotification("Error", "Project name and location cannot be empty.", "error");
+      return;
+    }
+
+    try {
+      const oldCode = id;
+      const cleanNewCode = editProjectCode.trim().toUpperCase();
+      const cleanNewName = editProjectName.trim().toUpperCase();
+      const cleanNewLocation = editProjectLocation.trim().toUpperCase();
+
+      if (cleanNewCode !== oldCode) {
+        await fetch(`/api/project-codes/${oldCode}`, { method: "DELETE" });
+      }
+
+      const res = await fetch("/api/project-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: cleanNewCode,
+          name: cleanNewName,
+          location: cleanNewLocation
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setProjectCodes(prev => {
+          let filtered = prev.filter(c => c.id !== oldCode);
+          filtered = filtered.filter(c => c.id !== data.entry.id && c.code !== data.entry.code);
+          return [...filtered, data.entry];
+        });
+        setEditingProjectId(null);
+        showNotification("Success", "Project mapping updated successfully.", "success");
+      } else {
+        const errData = await res.json();
+        showNotification("Error", errData.error || "Failed to update project mapping.", "error");
+      }
+    } catch (err) {
+      showNotification("Error", "Network error while updating project mapping.", "error");
+    }
   };
 
   const filteredLaborCodes = laborCodes.filter(lc => {
@@ -1987,6 +2101,25 @@ export default function App() {
                           />
                         </div>
 
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                            Designation / Trade
+                          </label>
+                          <select
+                            id="new-labor-designation"
+                            required
+                            value={newLaborDesignation}
+                            onChange={(e) => setNewLaborDesignation(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                          >
+                            {DESIGNATIONS.map((des) => (
+                              <option key={des} value={des}>
+                                {des}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
                         <button
                           id="save-code-mapping-btn"
                           type="submit"
@@ -2050,27 +2183,95 @@ export default function App() {
                               <tr>
                                 <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">LABOR CODE</th>
                                 <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">FULL NAME</th>
+                                <th className="py-2.5 px-4 font-bold border-r border-[#1e293b]">DESIGNATION / TRADE</th>
                                 <th className="py-2.5 px-4 font-bold text-center">ACTION</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200 text-xs font-medium">
                               {filteredLaborCodes.map((lc) => (
                                 <tr key={lc.id} className="hover:bg-slate-50 transition-colors duration-100 border-b border-slate-200">
-                                  <td className="py-2 px-4 text-[#e11d48] font-bold font-mono uppercase border-r border-slate-200 bg-indigo-50/5">
-                                    {lc.code}
-                                  </td>
-                                  <td className="py-2 px-4 text-slate-800 font-bold uppercase border-r border-slate-200">
-                                    {lc.name}
-                                  </td>
-                                  <td className="py-2 px-4 text-center">
-                                    <button
-                                      onClick={() => handleDeleteLaborCode(lc.id, lc.code)}
-                                      title="Delete Mapping"
-                                      className="p-1 px-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-800 border border-rose-200 rounded cursor-pointer transition-colors"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5 inline" />
-                                    </button>
-                                  </td>
+                                  {editingLaborId === lc.id ? (
+                                    <>
+                                      <td className="py-1 px-3 border-r border-slate-200">
+                                        <input
+                                          type="text"
+                                          value={editLaborCode}
+                                          onChange={(e) => setEditLaborCode(e.target.value.toUpperCase())}
+                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono font-bold text-[#e11d48] uppercase focus:outline-none focus:ring-1 focus:ring-rose-500"
+                                        />
+                                      </td>
+                                      <td className="py-1 px-3 border-r border-slate-200">
+                                        <input
+                                          type="text"
+                                          value={editLaborName}
+                                          onChange={(e) => setEditLaborName(e.target.value.toUpperCase())}
+                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                      </td>
+                                      <td className="py-1 px-3 border-r border-slate-200">
+                                        <select
+                                          value={editLaborDesignation}
+                                          onChange={(e) => setEditLaborDesignation(e.target.value.toUpperCase())}
+                                          className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs font-semibold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        >
+                                          {DESIGNATIONS.map((des) => (
+                                            <option key={des} value={des}>
+                                              {des}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </td>
+                                      <td className="py-1 px-3 text-center flex items-center justify-center gap-1.5 min-h-[38px]">
+                                        <button
+                                          onClick={() => handleUpdateLaborCode(lc.id)}
+                                          title="Save Changes"
+                                          className="p-1 px-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded cursor-pointer transition-colors"
+                                        >
+                                          <Check className="h-3.5 w-3.5" />
+                                        </button>
+                                        <button
+                                          onClick={() => setEditingLaborId(null)}
+                                          title="Cancel"
+                                          className="p-1 px-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 border border-slate-300 rounded cursor-pointer transition-colors"
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      </td>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <td className="py-2 px-4 text-[#e11d48] font-bold font-mono uppercase border-r border-slate-200 bg-indigo-50/5">
+                                        {lc.code}
+                                      </td>
+                                      <td className="py-2 px-4 text-slate-800 font-bold uppercase border-r border-slate-200">
+                                        {lc.name}
+                                      </td>
+                                      <td className="py-2 px-4 text-slate-600 uppercase border-r border-slate-200 font-semibold">
+                                        {lc.designation || "HELPER"}
+                                      </td>
+                                      <td className="py-2 px-4 text-center space-x-1.5">
+                                        <button
+                                          onClick={() => {
+                                            setEditingLaborId(lc.id);
+                                            setEditLaborCode(lc.code);
+                                            setEditLaborName(lc.name);
+                                            setEditLaborDesignation(lc.designation || "HELPER");
+                                          }}
+                                          title="Edit Mapping"
+                                          className="p-1 px-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded cursor-pointer transition-colors"
+                                        >
+                                          <Edit className="h-3.5 w-3.5 inline" />
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteLaborCode(lc.id, lc.code)}
+                                          title="Delete Mapping"
+                                          className="p-1 px-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-800 border border-rose-200 rounded cursor-pointer transition-colors"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5 inline" />
+                                        </button>
+                                      </td>
+                                    </>
+                                  )}
                                 </tr>
                               ))}
                             </tbody>
@@ -2215,24 +2416,83 @@ export default function App() {
                             <tbody className="divide-y divide-slate-200 text-xs font-medium">
                               {filteredProjectCodes.map((pc) => (
                                 <tr key={pc.id} className="hover:bg-slate-50 transition-colors duration-100 border-b border-slate-200">
-                                  <td className="py-2 px-4 text-[#e11d48] font-bold font-mono uppercase border-r border-slate-200 bg-indigo-50/5">
-                                    {pc.code}
-                                  </td>
-                                  <td className="py-2 px-4 text-slate-800 font-bold uppercase border-r border-slate-200">
-                                    {pc.name}
-                                  </td>
-                                  <td className="py-2 px-4 text-slate-600 uppercase border-r border-slate-200">
-                                    {pc.location}
-                                  </td>
-                                  <td className="py-2 px-4 text-center">
-                                    <button
-                                      onClick={() => handleDeleteProjectCode(pc.id, pc.code)}
-                                      title="Delete Mapping"
-                                      className="p-1 px-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-800 border border-rose-200 rounded cursor-pointer transition-colors"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5 inline" />
-                                    </button>
-                                  </td>
+                                  {editingProjectId === pc.id ? (
+                                    <>
+                                      <td className="py-1 px-3 border-r border-slate-200">
+                                        <input
+                                          type="text"
+                                          value={editProjectCode}
+                                          onChange={(e) => setEditProjectCode(e.target.value.toUpperCase())}
+                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono font-bold text-[#e11d48] uppercase focus:outline-none focus:ring-1 focus:ring-rose-500"
+                                        />
+                                      </td>
+                                      <td className="py-1 px-3 border-r border-slate-200">
+                                        <input
+                                          type="text"
+                                          value={editProjectName}
+                                          onChange={(e) => setEditProjectName(e.target.value.toUpperCase())}
+                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-800 uppercase focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                      </td>
+                                      <td className="py-1 px-3 border-r border-slate-200">
+                                        <input
+                                          type="text"
+                                          value={editProjectLocation}
+                                          onChange={(e) => setEditProjectLocation(e.target.value.toUpperCase())}
+                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-bold text-slate-600 uppercase focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                      </td>
+                                      <td className="py-1 px-3 text-center flex items-center justify-center gap-1.5 min-h-[38px]">
+                                        <button
+                                          onClick={() => handleUpdateProjectCode(pc.id)}
+                                          title="Save Changes"
+                                          className="p-1 px-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-800 border border-emerald-200 rounded cursor-pointer transition-colors"
+                                        >
+                                          <Check className="h-3.5 w-3.5" />
+                                        </button>
+                                        <button
+                                          onClick={() => setEditingProjectId(null)}
+                                          title="Cancel"
+                                          className="p-1 px-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 border border-slate-300 rounded cursor-pointer transition-colors"
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      </td>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <td className="py-2 px-4 text-[#e11d48] font-bold font-mono uppercase border-r border-slate-200 bg-indigo-50/5">
+                                        {pc.code}
+                                      </td>
+                                      <td className="py-2 px-4 text-slate-800 font-bold uppercase border-r border-slate-200">
+                                        {pc.name}
+                                      </td>
+                                      <td className="py-2 px-4 text-slate-600 uppercase border-r border-slate-200">
+                                        {pc.location}
+                                      </td>
+                                      <td className="py-2 px-4 text-center space-x-1.5">
+                                        <button
+                                          onClick={() => {
+                                            setEditingProjectId(pc.id);
+                                            setEditProjectCode(pc.code);
+                                            setEditProjectName(pc.name);
+                                            setEditProjectLocation(pc.location);
+                                          }}
+                                          title="Edit Mapping"
+                                          className="p-1 px-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded cursor-pointer transition-colors"
+                                        >
+                                          <Edit className="h-3.5 w-3.5 inline" />
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteProjectCode(pc.id, pc.code)}
+                                          title="Delete Mapping"
+                                          className="p-1 px-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-800 border border-rose-200 rounded cursor-pointer transition-colors"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5 inline" />
+                                        </button>
+                                      </td>
+                                    </>
+                                  )}
                                 </tr>
                               ))}
                             </tbody>
