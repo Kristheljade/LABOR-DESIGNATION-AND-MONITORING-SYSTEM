@@ -580,6 +580,7 @@ export default function App() {
   
   // New States for Progress Monitoring row editing and single sheet viewing
   const [editingProgressId, setEditingProgressId] = useState<string | null>(null);
+  const [selectedProgressRowIds, setSelectedProgressRowIds] = useState<string[]>([]);
   const [editProgressForm, setEditProgressForm] = useState({
     activityName: "",
     workCompletedPercent: "",
@@ -1611,6 +1612,97 @@ export default function App() {
           }
         } catch (error) {
           showNotification("Error", "Network error while deleting project daily sheet.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  const handleDeleteDailyLogDate = (dateStr: string) => {
+    if (!dateStr) return;
+
+    const formatDateHelper = (d: string) => {
+      const parts = d.split("-");
+      if (parts.length !== 3) return d;
+      const year = parts[0];
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const months = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+      ];
+      return `${months[monthIdx] || parts[1]} ${day}, ${year}`;
+    };
+
+    const matchingRecords = submissions.filter(s => (s.date || "UNKNOWN") === dateStr);
+
+    if (matchingRecords.length === 0) {
+      showNotification("Error", "No records found for the selected date.", "error");
+      return;
+    }
+
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Entire Date Logs",
+      message: `Are you sure you want to permanently delete all logs for ${formatDateHelper(dateStr)}? This will delete all ${matchingRecords.length} activity records across all projects on this date. This action cannot be undone.`,
+      confirmText: "Yes, Delete All",
+      onConfirm: async () => {
+        try {
+          const deletePromises = matchingRecords.map(r => 
+            fetch(`/api/submissions/${r.id}`, { method: "DELETE" })
+          );
+          const results = await Promise.all(deletePromises);
+          const allSuccessful = results.every(res => res.ok);
+
+          if (allSuccessful) {
+            setSubmissions(prev => prev.filter(s => (s.date || "UNKNOWN") !== dateStr));
+            showNotification("Success", `All logs for ${formatDateHelper(dateStr)} deleted successfully.`, "success");
+            fetchLedgerFiles();
+            if (selectedMonitoringDate === dateStr) {
+              setSelectedMonitoringDate("");
+            }
+          } else {
+            await fetchSubmissions();
+            showNotification("Warning", "Some records could not be deleted. Refreshing list.", "info");
+          }
+        } catch (error) {
+          showNotification("Error", "Network error while deleting date logs.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  const handleDeleteMultipleItems = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Selected Records",
+      message: `Are you sure you want to permanently delete the ${ids.length} selected log entries? This action cannot be undone.`,
+      confirmText: "Yes, Delete Selected",
+      onConfirm: async () => {
+        try {
+          const deletePromises = ids.map(id => 
+            fetch(`/api/submissions/${id}`, { method: "DELETE" })
+          );
+          const results = await Promise.all(deletePromises);
+          const allSuccessful = results.every(res => res.ok);
+
+          if (allSuccessful) {
+            setSubmissions(prev => prev.filter(s => !ids.includes(s.id)));
+            setSelectedProgressRowIds(prev => prev.filter(id => !ids.includes(id)));
+            showNotification("Success", `${ids.length} records deleted successfully.`, "success");
+            fetchLedgerFiles();
+          } else {
+            // Partial success
+            await fetchSubmissions();
+            setSelectedProgressRowIds([]);
+            showNotification("Warning", "Some records could not be deleted. Refreshing list.", "info");
+          }
+        } catch (err) {
+          showNotification("Network Error", "Could not connect to the database server.", "error");
         } finally {
           setConfirmState(prev => ({ ...prev, isOpen: false }));
         }
@@ -3786,11 +3878,28 @@ export default function App() {
                                                   <span className="text-xs font-bold font-mono tracking-tight">
                                                     {formatDateLong(dKey)}
                                                   </span>
-                                                  <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
-                                                    isSelected ? "bg-slate-800 text-slate-300 border border-slate-700" : "bg-slate-100 text-slate-500 border border-slate-200"
-                                                  }`}>
-                                                    {pCodes.length} {pCodes.length === 1 ? "project" : "projects"}
-                                                  </span>
+                                                  <div className="flex items-center gap-1.5">
+                                                    <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                                                      isSelected ? "bg-slate-800 text-slate-300 border border-slate-700" : "bg-slate-100 text-slate-500 border border-slate-200"
+                                                    }`}>
+                                                      {pCodes.length} {pCodes.length === 1 ? "project" : "projects"}
+                                                    </span>
+                                                    <button
+                                                      type="button"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleDeleteDailyLogDate(dKey);
+                                                      }}
+                                                      className={`p-1 rounded-md transition-colors ${
+                                                        isSelected 
+                                                          ? "text-rose-400 hover:text-rose-300 hover:bg-slate-800" 
+                                                          : "text-rose-500 hover:text-rose-600 hover:bg-rose-50"
+                                                      }`}
+                                                      title={`Delete all logs on ${formatDateLong(dKey)}`}
+                                                    >
+                                                      <Trash2 className="h-3.5 w-3.5" />
+                                                    </button>
+                                                  </div>
                                                 </div>
 
                                                 {/* Projects under this date as nested items */}
@@ -3851,6 +3960,43 @@ export default function App() {
                                 </div>
                               </div>
                             )}
+
+                            {/* Select Date to Delete Entirely */}
+                            {allAvailableDates.length > 0 && (
+                              <div className="bg-white rounded-3xl border border-rose-200/80 p-5 shadow-xs space-y-3 mt-4">
+                                <div className="flex items-center gap-2 border-b border-rose-100 pb-2.5 text-rose-600">
+                                  <Trash2 className="h-4 w-4 text-rose-500" />
+                                  <span className="text-xs font-bold font-mono uppercase tracking-wider">
+                                    Delete Date Logs
+                                  </span>
+                                </div>
+
+                                <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                                  Select a date from the dropdown to delete all its daily progress log entries across all projects.
+                                </p>
+
+                                <div className="flex flex-col gap-2">
+                                  <select
+                                    id="monitoring-delete-date-select"
+                                    onChange={(e) => {
+                                      const dateStr = e.target.value;
+                                      if (dateStr) {
+                                        handleDeleteDailyLogDate(dateStr);
+                                        e.target.value = ""; // Reset
+                                      }
+                                    }}
+                                    className="w-full px-3 py-2 bg-rose-50/30 border border-rose-150 rounded-xl text-xs font-semibold text-rose-800 focus:bg-white focus:outline-none transition-all uppercase cursor-pointer"
+                                  >
+                                    <option value="">-- Select Date --</option>
+                                    {allAvailableDates.map((dateStr) => (
+                                      <option key={dateStr} value={dateStr}>
+                                        {formatDateLong(dateStr)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {/* Right Column: Active Date Project Records */}
@@ -3883,6 +4029,9 @@ export default function App() {
                                     const dayEntries = projData.records;
                                     const dayRefNo = `WR/${pCode}/${activeDate.replace(/-/g, "").substring(2,6) || "29"}`;
                                     const siteEngineerName = dayEntries[0]?.siteEngineer || "N/A";
+                                    const projectSelectedRowIds = dayEntries
+                                      .map(r => r.id)
+                                      .filter(id => selectedProgressRowIds.includes(id));
 
                                     return (
                                       <div key={pCode} className="bg-white rounded-3xl border border-slate-200 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] overflow-hidden p-6 relative space-y-6">
@@ -3938,6 +4087,15 @@ export default function App() {
                                             >
                                               <Trash2 className="h-3 w-3" /> Delete
                                             </button>
+                                            {projectSelectedRowIds.length > 0 && (
+                                              <button
+                                                onClick={() => handleDeleteMultipleItems(projectSelectedRowIds)}
+                                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white bg-rose-600 hover:bg-rose-700 rounded-lg border border-rose-500 cursor-pointer transition-all shadow-xs animate-fadeIn"
+                                                title={`Delete ${projectSelectedRowIds.length} selected items`}
+                                              >
+                                                <Trash2 className="h-3 w-3 text-white" /> Delete Selected ({projectSelectedRowIds.length})
+                                              </button>
+                                            )}
                                           </div>
                                         </div>
 
@@ -3963,6 +4121,26 @@ export default function App() {
                                             <table className="w-full text-left border-collapse min-w-[1000px]">
                                               <thead>
                                                 <tr className="bg-[#DDEBF7] text-[#1F4E78] text-[10px] font-mono tracking-wider uppercase border-b border-slate-300">
+                                                  <th className="py-2.5 px-2 font-bold border-r border-slate-300 text-center w-10">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={dayEntries.length > 0 && dayEntries.every(r => selectedProgressRowIds.includes(r.id))}
+                                                      onChange={(e) => {
+                                                        const isChecked = e.target.checked;
+                                                        const entryIds = dayEntries.map(r => r.id);
+                                                        if (isChecked) {
+                                                          setSelectedProgressRowIds(prev => {
+                                                            const union = new Set([...prev, ...entryIds]);
+                                                            return Array.from(union);
+                                                          });
+                                                        } else {
+                                                          setSelectedProgressRowIds(prev => prev.filter(id => !entryIds.includes(id)));
+                                                        }
+                                                      }}
+                                                      className="rounded border-slate-300 text-[#1F4E78] focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
+                                                      title="Select All"
+                                                    />
+                                                  </th>
                                                   <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-16">S/NO.</th>
                                                   <th className="py-2.5 px-4 font-bold border-r border-slate-300">NAME OF ACTIVITY</th>
                                                   <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-40">% WORK COMPLETED</th>
@@ -3981,7 +4159,10 @@ export default function App() {
 
                                                   return editingProgressId === row.id ? (
                                                     <tr key={row.id} className="bg-blue-50/40 border-b border-blue-100 animate-fadeIn">
-                                                      <td className="py-2 px-2 text-center border-r border-slate-200 text-slate-400 font-bold font-mono">
+                                                      <td className="py-2 px-2 border-r border-slate-200 text-center">
+                                                         {/* Spacer for checkbox column during edit mode */}
+                                                       </td>
+                                                       <td className="py-2 px-2 text-center border-r border-slate-200 text-slate-400 font-bold font-mono">
                                                         {idx + 1}
                                                       </td>
                                                       <td className="py-2 px-2 border-r border-slate-200">
@@ -4068,7 +4249,22 @@ export default function App() {
                                                     </tr>
                                                   ) : (
                                                     <tr key={row.id} className="hover:bg-slate-50/55 transition-colors">
-                                                      <td className="py-3 px-3 text-center border-r border-slate-200 text-slate-400 font-bold font-mono">
+                                                      <td className="py-3 px-2 text-center border-r border-slate-200">
+                                                         <input
+                                                           type="checkbox"
+                                                           checked={selectedProgressRowIds.includes(row.id)}
+                                                           onChange={(e) => {
+                                                             const isChecked = e.target.checked;
+                                                             if (isChecked) {
+                                                               setSelectedProgressRowIds(prev => [...prev, row.id]);
+                                                             } else {
+                                                               setSelectedProgressRowIds(prev => prev.filter(id => id !== row.id));
+                                                             }
+                                                           }}
+                                                           className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
+                                                         />
+                                                       </td>
+                                                       <td className="py-3 px-3 text-center border-r border-slate-200 text-slate-400 font-bold font-mono">
                                                         {idx + 1}
                                                       </td>
                                                       <td className="py-3 px-4 font-bold border-r border-slate-200 text-slate-900 uppercase">
@@ -4142,7 +4338,8 @@ export default function App() {
                                                 {/* Summary row */}
                                                 <tr className="bg-[#E2EFDA] text-slate-800 select-none">
                                                   <td className="py-2 px-3 border-r border-slate-300"></td>
-                                                  <td className="py-2 px-4 font-bold border-r border-slate-300 text-[10px] uppercase text-[#375623]">TOTAL ACTIVITIES IN SHEET</td>
+                                                  <td className="py-2 px-2 border-r border-slate-300"></td>
+                                                   <td className="py-2 px-4 font-bold border-r border-slate-300 text-[10px] uppercase text-[#375623]">TOTAL ACTIVITIES IN SHEET</td>
                                                   <td className="py-2 px-3 border-r border-slate-300 font-bold font-mono text-[11px] text-[#375623]">{dayEntries.length}</td>
                                                   <td className="py-2 px-3 border-r border-slate-300"></td>
                                                   <td className="py-2 px-3 border-r border-slate-300"></td>
