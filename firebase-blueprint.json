@@ -37,6 +37,10 @@
           "type": "string",
           "description": "The precise task assigned for monitoring."
         },
+        "attendanceStatus": {
+          "type": "string",
+          "description": "The labor attendance status (Present, Absent, Under Time)."
+        },
         "createdAt": {
           "type": "string",
           "description": "The ISO timestamp when this entry was submitted."

@@ -573,7 +573,7 @@ app.delete("/api/project-codes/:id", async (req, res) => {
 // Create submission (Public)
 app.post("/api/submissions", async (req, res) => {
   try {
-    const { date, project, laborsName, designation, projectLocation, siteEngineer, reassignedTask } = req.body;
+    const { date, project, laborsName, designation, projectLocation, siteEngineer, reassignedTask, attendanceStatus } = req.body;
     
     if (!date || !project || !laborsName || !designation || !projectLocation || !siteEngineer || !reassignedTask) {
       return res.status(400).json({ error: "All fields are required." });
@@ -608,6 +608,7 @@ app.post("/api/submissions", async (req, res) => {
       projectLocation,
       siteEngineer,
       reassignedTask,
+      attendanceStatus: attendanceStatus || "Present",
       createdAt: new Date().toISOString()
     };
 

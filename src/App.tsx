@@ -485,6 +485,7 @@ export default function App() {
     customDesignation: "",
     customReassignedTask: "",
     laborCode: "",
+    attendanceStatus: "Present",
   });
 
   // Submission UX state
@@ -1183,6 +1184,7 @@ export default function App() {
       projectLocation: formData.projectLocation.trim().toUpperCase(),
       siteEngineer: formData.siteEngineer.trim().toUpperCase(),
       reassignedTask: actualReassignedTask.toUpperCase(),
+      attendanceStatus: formData.attendanceStatus,
     };
 
     try {
@@ -1202,6 +1204,7 @@ export default function App() {
           customDesignation: "",
           customReassignedTask: "",
           laborCode: "",
+          attendanceStatus: "Present",
         }));
         setMatchedLaborName("");
         // Also refresh the separate daily and monthly ledger files list in the background
@@ -1316,7 +1319,8 @@ export default function App() {
         "TRADE / DESIGNATION",
         "SITE LOCATION",
         "SITE ENGINEER",
-        "ASSIGNED TASK"
+        "ASSIGNED TASK",
+        "ATTENDANCE"
       ];
 
       const tableRows = records.map((s) => [
@@ -1326,7 +1330,8 @@ export default function App() {
         s.designation || "-",
         s.projectLocation || "-",
         s.siteEngineer || "-",
-        s.reassignedTask || "-"
+        s.reassignedTask || "-",
+        s.attendanceStatus || "Present"
       ]);
 
       const tableOptions = {
@@ -1350,12 +1355,13 @@ export default function App() {
         },
         columnStyles: {
           0: { cellWidth: 24 }, // Date
-          1: { cellWidth: 46 }, // Project
-          2: { cellWidth: 46 }, // Labor Name
-          3: { cellWidth: 36 }, // Trade/Designation
-          4: { cellWidth: 35 }, // Location
-          5: { cellWidth: 35 }, // Engineer
-          6: { cellWidth: 45 }  // Assigned Task
+          1: { cellWidth: 38 }, // Project
+          2: { cellWidth: 38 }, // Labor Name
+          3: { cellWidth: 32 }, // Trade/Designation
+          4: { cellWidth: 32 }, // Location
+          5: { cellWidth: 32 }, // Engineer
+          6: { cellWidth: 38 }, // Assigned Task
+          7: { cellWidth: 33 }  // Attendance
         },
         styles: {
           cellPadding: 2.5,
@@ -1539,7 +1545,8 @@ export default function App() {
         "TRADE / DESIGNATION",
         "SITE LOCATION",
         "SITE ENGINEER",
-        "ASSIGNED TASK"
+        "ASSIGNED TASK",
+        "ATTENDANCE"
       ];
 
       const tableRows = filteredSubmissions.map((s) => [
@@ -1549,7 +1556,8 @@ export default function App() {
         s.designation || "-",
         s.projectLocation || "-",
         s.siteEngineer || "-",
-        s.reassignedTask || "-"
+        s.reassignedTask || "-",
+        s.attendanceStatus || "Present"
       ]);
 
       const tableOptions = {
@@ -1573,12 +1581,13 @@ export default function App() {
         },
         columnStyles: {
           0: { cellWidth: 24 }, // Date
-          1: { cellWidth: 46 }, // Project
-          2: { cellWidth: 46 }, // Labor Name
-          3: { cellWidth: 36 }, // Trade/Designation
-          4: { cellWidth: 35 }, // Location
-          5: { cellWidth: 35 }, // Engineer
-          6: { cellWidth: 45 }  // Assigned Task
+          1: { cellWidth: 38 }, // Project
+          2: { cellWidth: 38 }, // Labor Name
+          3: { cellWidth: 32 }, // Trade/Designation
+          4: { cellWidth: 32 }, // Location
+          5: { cellWidth: 32 }, // Engineer
+          6: { cellWidth: 38 }, // Assigned Task
+          7: { cellWidth: 33 }  // Attendance
         },
         styles: {
           cellPadding: 2.5,
@@ -1970,6 +1979,56 @@ export default function App() {
 
                     </div>
 
+                  </div>
+
+                  {/* ATTENDANCE STATUS SECTION */}
+                  <div className="pt-6 border-t border-slate-100">
+                    <label className="block text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5">
+                      <UserCheck className="h-3.5 w-3.5 text-slate-400" /> Labor Attendance Status
+                    </label>
+                    <div id="attendance-status-selector" className="grid grid-cols-3 gap-4 max-w-lg">
+                      <button
+                        id="attendance-btn-present"
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Present" }))}
+                        className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                          formData.attendanceStatus === "Present"
+                            ? "bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-100"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                        }`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Present" ? "bg-white" : "bg-emerald-500"}`}></span>
+                        Present
+                      </button>
+
+                      <button
+                        id="attendance-btn-absent"
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Absent" }))}
+                        className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                          formData.attendanceStatus === "Absent"
+                            ? "bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-100"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                        }`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Absent" ? "bg-white" : "bg-rose-500"}`}></span>
+                        Absent
+                      </button>
+
+                      <button
+                        id="attendance-btn-undertime"
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Under Time" }))}
+                        className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                          formData.attendanceStatus === "Under Time"
+                            ? "bg-amber-600 text-white border-amber-600 shadow-sm shadow-amber-100"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                        }`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Under Time" ? "bg-white" : "bg-amber-500"}`}></span>
+                        Under Time
+                      </button>
+                    </div>
                   </div>
 
                   {/* SUBMIT BLOCK */}
@@ -2601,6 +2660,7 @@ export default function App() {
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">PROJECT LOCATION</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">SITE ENGINEER</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">REASSIGNED TASK</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b] text-center">ATTENDANCE</th>
                             <th className="py-3 px-4 font-bold text-center">ACTION</th>
                           </tr>
                         </thead>
@@ -2659,6 +2719,19 @@ export default function App() {
                                 {/* REASSIGNED TASK (uppercase bold green as shown in screenshot "HOUSEKEEPING"/"STEEL FIXER") */}
                                 <td className="py-3.5 px-4 text-emerald-700 font-extrabold uppercase bg-emerald-50/10 border-r border-slate-200">
                                   {s.reassignedTask}
+                                </td>
+
+                                {/* ATTENDANCE STATUS */}
+                                <td className="py-3.5 px-4 text-center border-r border-slate-200">
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-extrabold uppercase whitespace-nowrap ${
+                                    (s.attendanceStatus || "Present") === "Present"
+                                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                      : (s.attendanceStatus || "Present") === "Absent"
+                                      ? "bg-rose-100 text-rose-800 border border-rose-200"
+                                      : "bg-amber-100 text-amber-800 border border-amber-200"
+                                  }`}>
+                                    {s.attendanceStatus || "Present"}
+                                  </span>
                                 </td>
 
                                 {/* DELETION ACTION */}
@@ -3560,7 +3633,8 @@ export default function App() {
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">DESIGNATION</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">LOCATION</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">SITE ENGINEER</th>
-                            <th className="py-3 px-4 font-bold">ASSIGNED TASK</th>
+                            <th className="py-3 px-4 font-bold border-r border-[#1e293b]">ASSIGNED TASK</th>
+                            <th className="py-3 px-4 font-bold text-center">ATTENDANCE</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs font-medium">
@@ -3581,7 +3655,7 @@ export default function App() {
                             if (filtered.length === 0) {
                               return (
                                 <tr>
-                                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                                  <td colSpan={8} className="py-12 text-center text-slate-400">
                                     No records found matching your file filter query.
                                   </td>
                                 </tr>
@@ -3600,8 +3674,19 @@ export default function App() {
                                 </td>
                                 <td className="py-2.5 px-4 text-slate-600 uppercase border-r border-slate-100">{r.projectLocation || "-"}</td>
                                 <td className="py-2.5 px-4 text-slate-700 font-bold uppercase border-r border-slate-100">{r.siteEngineer}</td>
-                                <td className="py-2.5 px-4 text-slate-600 uppercase leading-relaxed max-w-xs truncate" title={r.reassignedTask}>
+                                <td className="py-2.5 px-4 text-slate-600 uppercase leading-relaxed max-w-xs truncate border-r border-slate-100" title={r.reassignedTask}>
                                   {r.reassignedTask}
+                                </td>
+                                <td className="py-2.5 px-4 text-center">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase whitespace-nowrap inline-block ${
+                                    (r.attendanceStatus || "Present") === "Present"
+                                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                      : (r.attendanceStatus || "Present") === "Absent"
+                                      ? "bg-rose-100 text-rose-800 border border-rose-200"
+                                      : "bg-amber-100 text-amber-800 border border-amber-200"
+                                  }`}>
+                                    {r.attendanceStatus || "Present"}
+                                  </span>
                                 </td>
                               </tr>
                             ));

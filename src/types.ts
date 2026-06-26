@@ -8,6 +8,7 @@ export interface Submission {
   siteEngineer: string;
   reassignedTask: string;
   createdAt: string;
+  attendanceStatus?: string;
 }
 
 export interface VerificationResponse {
