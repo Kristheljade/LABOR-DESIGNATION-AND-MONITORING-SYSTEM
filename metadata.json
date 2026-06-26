@@ -3,6 +3,6 @@
   "description": "A secure digital log sheet for sub-contracted external labor with private administrative dashboard access.",
   "requestFramePermissions": [],
   "majorCapabilities": [
-    ""
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

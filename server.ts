@@ -146,6 +146,11 @@ async function syncSeparateFiles() {
     const monthlyGroups: Record<string, any[]> = {};
 
     for (const s of submissions) {
+      // Only include submissions with valid laborsName for daily and monthly labor attendance ledger files
+      if (!s.laborsName || !s.laborsName.trim()) {
+        continue;
+      }
+
       const sDate = s.date || "unknown";
       const dayKey = sDate.trim(); // e.g., "2026-06-25"
       const monthKey = sDate.length >= 7 ? sDate.substring(0, 7) : "unknown"; // e.g., "2026-06"
@@ -573,42 +578,75 @@ app.delete("/api/project-codes/:id", async (req, res) => {
 // Create submission (Public)
 app.post("/api/submissions", async (req, res) => {
   try {
-    const { date, project, laborsName, designation, projectLocation, siteEngineer, reassignedTask, attendanceStatus } = req.body;
+    const { 
+      date, 
+      project, 
+      laborsName, 
+      designation, 
+      projectLocation, 
+      siteEngineer, 
+      reassignedTask, 
+      attendanceStatus,
+      activityName,
+      workCompletedPercent,
+      targetDate,
+      workCompletedTodayPercent,
+      noOfLaborSubcontractor,
+      equipment,
+      remarks
+    } = req.body;
     
-    if (!date || !project || !laborsName || !designation || !projectLocation || !siteEngineer || !reassignedTask) {
-      return res.status(400).json({ error: "All fields are required." });
+    const isMonitoringOnly = !!(activityName && activityName.trim());
+    
+    if (isMonitoringOnly) {
+      if (!date || !project || !projectLocation || !siteEngineer) {
+        return res.status(400).json({ error: "Date, Project, Site Location, and Site Engineer are required for Activity Monitoring." });
+      }
+    } else {
+      if (!date || !project || !laborsName || !designation || !projectLocation || !siteEngineer || !reassignedTask) {
+        return res.status(400).json({ error: "All Labor Attendance fields are required." });
+      }
     }
 
-    // Check for duplicate labor entry on the same day in Binlahej Ledger
-    try {
-      const submissions = await getSubmissions();
-      const isDuplicate = submissions.some((sub: any) => {
-        return (
-          sub.date === date &&
-          sub.laborsName &&
-          sub.laborsName.trim().toUpperCase() === laborsName.trim().toUpperCase()
-        );
-      });
-
-      if (isDuplicate) {
-        return res.status(400).json({
-          error: `Labor '${laborsName.trim().toUpperCase()}' has already been logged on ${date} in the ledger.`
+    // Check for duplicate labor entry on the same day in Binlahej Ledger (only if laborsName is provided)
+    if (laborsName && laborsName.trim()) {
+      try {
+        const submissions = await getSubmissions();
+        const isDuplicate = submissions.some((sub: any) => {
+          return (
+            sub.date === date &&
+            sub.laborsName &&
+            sub.laborsName.trim().toUpperCase() === laborsName.trim().toUpperCase()
+          );
         });
+
+        if (isDuplicate) {
+          return res.status(400).json({
+            error: `Labor '${laborsName.trim().toUpperCase()}' has already been logged on ${date} in the ledger.`
+          });
+        }
+      } catch (dbCheckError) {
+        console.warn("Failed checking for duplicate submissions:", dbCheckError);
       }
-    } catch (dbCheckError) {
-      console.warn("Failed checking for duplicate submissions:", dbCheckError);
     }
 
     const id = Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6);
     const newSubmission = {
       date,
       project,
-      laborsName,
-      designation,
-      projectLocation,
-      siteEngineer,
-      reassignedTask,
+      laborsName: laborsName || "",
+      designation: designation || "",
+      projectLocation: projectLocation || "",
+      siteEngineer: siteEngineer || "",
+      reassignedTask: reassignedTask || "",
       attendanceStatus: attendanceStatus || "Present",
+      activityName: activityName || "",
+      workCompletedPercent: workCompletedPercent || "",
+      targetDate: targetDate || "",
+      workCompletedTodayPercent: workCompletedTodayPercent || "",
+      noOfLaborSubcontractor: noOfLaborSubcontractor || "",
+      equipment: equipment || "",
+      remarks: remarks || "",
       createdAt: new Date().toISOString()
     };
 
@@ -642,6 +680,86 @@ app.post("/api/submissions", async (req, res) => {
     await syncSeparateFiles();
 
     res.status(201).json({ success: true, entry: { id, ...newSubmission }, storedInFirebase: firebaseSuccess });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update submission (Public)
+app.put("/api/submissions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      date, 
+      project, 
+      laborsName, 
+      designation, 
+      projectLocation, 
+      siteEngineer, 
+      reassignedTask, 
+      attendanceStatus,
+      activityName,
+      workCompletedPercent,
+      targetDate,
+      workCompletedTodayPercent,
+      noOfLaborSubcontractor,
+      equipment,
+      remarks
+    } = req.body;
+
+    let submissions = [];
+    if (existsSync(DATA_FILE)) {
+      const data = await fs.readFile(DATA_FILE, "utf-8");
+      submissions = JSON.parse(data || "[]");
+    }
+
+    const index = submissions.findIndex((s: any) => s.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: "Record not found." });
+    }
+
+    const updatedSubmission = {
+      ...submissions[index],
+      date: date !== undefined ? date : submissions[index].date,
+      project: project !== undefined ? project : submissions[index].project,
+      laborsName: laborsName !== undefined ? laborsName : submissions[index].laborsName,
+      designation: designation !== undefined ? designation : submissions[index].designation,
+      projectLocation: projectLocation !== undefined ? projectLocation : submissions[index].projectLocation,
+      siteEngineer: siteEngineer !== undefined ? siteEngineer : submissions[index].siteEngineer,
+      reassignedTask: reassignedTask !== undefined ? reassignedTask : submissions[index].reassignedTask,
+      attendanceStatus: attendanceStatus !== undefined ? attendanceStatus : submissions[index].attendanceStatus,
+      activityName: activityName !== undefined ? activityName : submissions[index].activityName,
+      workCompletedPercent: workCompletedPercent !== undefined ? workCompletedPercent : submissions[index].workCompletedPercent,
+      targetDate: targetDate !== undefined ? targetDate : submissions[index].targetDate,
+      workCompletedTodayPercent: workCompletedTodayPercent !== undefined ? workCompletedTodayPercent : submissions[index].workCompletedTodayPercent,
+      noOfLaborSubcontractor: noOfLaborSubcontractor !== undefined ? noOfLaborSubcontractor : submissions[index].noOfLaborSubcontractor,
+      equipment: equipment !== undefined ? equipment : submissions[index].equipment,
+      remarks: remarks !== undefined ? remarks : submissions[index].remarks,
+      updatedAt: new Date().toISOString()
+    };
+
+    submissions[index] = updatedSubmission;
+
+    // Write to Firebase Firestore
+    let firebaseSuccess = false;
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, "submissions", id), updatedSubmission);
+        firebaseSuccess = true;
+        console.log(`Successfully updated entry ${id} in Firestore.`);
+      }
+    } catch (error) {
+      console.warn("Failed writing updated entry to Firestore:", error);
+    }
+
+    // Write to local cache
+    await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
+
+    // Refresh the daily/monthly separate files
+    await syncSeparateFiles();
+
+    res.json({ success: true, entry: updatedSubmission, storedInFirebase: firebaseSuccess });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -851,14 +969,16 @@ app.get("/api/ledger-files/view/:type/:filename", requireAdmin, async (req, res)
 app.get("/api/export", requireAdmin, async (req, res) => {
   try {
     const submissions = await getSubmissions();
+    // Keep only entries with actual labor attendance logged
+    const laborSubmissions = submissions.filter((s: any) => s.laborsName && s.laborsName.trim() !== "");
     // Sort by date ascending for the Excel report
-    submissions.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    laborSubmissions.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     // CSV header with Byte Order Mark (BOM) for flawless Excel display with UTF-8 characters
     const BOM = "\uFEFF";
     let csvContent = BOM + '"DATE","PROJECT","LABORS NAME","DESIGNATION","PROJECT LOCATION","SITE ENGINEER","REASSIGNED TASK"\n';
 
-    for (const s of submissions) {
+    for (const s of laborSubmissions) {
       const row = [
         s.date,
         s.project,
@@ -882,10 +1002,135 @@ app.get("/api/export", requireAdmin, async (req, res) => {
   }
 });
 
+// Seed June 2026 progress monitoring records if missing
+async function seedJuneProgressMonitoring() {
+  try {
+    const firestoreDb = await getDb();
+    if (!firestoreDb) {
+      console.warn("Firestore not connected, skipping June seeding helper.");
+      return;
+    }
+
+    const DATA_FILE = path.join(process.cwd(), "entries.json");
+
+    // Check if we already have progress monitoring records in June 2026
+    let submissions: any[] = [];
+    try {
+      if (existsSync(DATA_FILE)) {
+        const data = await fs.readFile(DATA_FILE, "utf-8");
+        submissions = JSON.parse(data || "[]");
+      } else {
+        const colRef = collection(firestoreDb, "submissions");
+        const querySnapshot = await getDocs(colRef);
+        querySnapshot.forEach((doc) => {
+          submissions.push({ id: doc.id, ...doc.data() });
+        });
+      }
+    } catch (e) {
+      console.warn("Failed to read initial submissions for seed check:", e);
+    }
+
+    const juneProgressCount = submissions.filter((s: any) => 
+      s.activityName && 
+      s.activityName.trim() !== "" && 
+      s.date && 
+      s.date.startsWith("2026-06")
+    ).length;
+
+    if (juneProgressCount >= 100) {
+      console.log(`June progress monitoring seeding skipped: already has ${juneProgressCount} records.`);
+      return;
+    }
+
+    console.log(`Seeding June progress monitoring records... (currently has ${juneProgressCount})`);
+
+    // Load project codes
+    const projects = await getProjectCodes();
+    if (projects.length === 0) {
+      console.warn("No projects found to seed June progress monitoring.");
+      return;
+    }
+
+    const seededSubmissions = [...submissions];
+    const newRecords: any[] = [];
+
+    const activitiesByProject: Record<string, { activity: string, engineer: string, equipment: string, basePercent: number, step: number }> = {
+      "1038": { activity: "EXCAVATION & SHUTTERING", engineer: "ENGR. AHMAD", equipment: "EXCAVATOR", basePercent: 5, step: 3 },
+      "3039A": { activity: "STEEL FIXING & CONCRETING", engineer: "ENGR. SHAMJAS", equipment: "CONCRETE MIXER", basePercent: 8, step: 3 },
+      "3048": { activity: "BLOCK WORK & MASONRY", engineer: "ENGR. YONAS", equipment: "HAND TOOLS", basePercent: 10, step: 3 },
+      "3049": { activity: "PLASTERING", engineer: "ENGR. AHMAD", equipment: "SCAFFOLDING", basePercent: 4, step: 3 },
+      "3053": { activity: "BLOCK WORK", engineer: "ENGR. YONAS", equipment: "CONCRETE MIXER", basePercent: 15, step: 3 },
+      "3054": { activity: "FOUNDATION WORK", engineer: "ENGR. SHAMJAS", equipment: "EXCAVATOR", basePercent: 20, step: 3 },
+      "3056": { activity: "MEP INSTALLATION", engineer: "ENGR. YONAS", equipment: "HAND TOOLS", basePercent: 2, step: 2 },
+      "3057": { activity: "BLOCK WORK", engineer: "ENGR. SHAMJAS", equipment: "CONCRETE", basePercent: 10, step: 3 },
+      "3058": { activity: "WALL MASONRY", engineer: "ENGR. AHMAD", equipment: "HAND TOOLS", basePercent: 15, step: 3 },
+      "3061": { activity: "PAINTING & FINISHING", engineer: "ENGR. SHAMJAS", equipment: "SCAFFOLDING", basePercent: 5, step: 2 },
+    };
+
+    for (const project of projects) {
+      const code = project.code;
+      const config = activitiesByProject[code] || {
+        activity: "GENERAL CONSTRUCTION WORK",
+        engineer: "ENGR. YONAS",
+        equipment: "HAND TOOLS",
+        basePercent: 5,
+        step: 3
+      };
+
+      let currentCumPercent = config.basePercent;
+
+      for (let day = 1; day <= 30; day++) {
+        const dateStr = `2026-06-${day.toString().padStart(2, "0")}`;
+        
+        const dayIncrement = config.step + (day % 3); // realistic daily progress variation
+        currentCumPercent = Math.min(100, currentCumPercent + dayIncrement);
+
+        const recordId = `seed-june-${code}-${dateStr}`;
+        const newRecord = {
+          date: dateStr,
+          project: code,
+          laborsName: "",
+          designation: "",
+          projectLocation: project.location || "DUBAI, UAE",
+          siteEngineer: config.engineer,
+          reassignedTask: "",
+          attendanceStatus: "Present",
+          activityName: config.activity,
+          workCompletedPercent: currentCumPercent.toString(),
+          targetDate: "2026-06-30",
+          workCompletedTodayPercent: dayIncrement.toString(),
+          noOfLaborSubcontractor: (4 + (day % 4)).toString(), 
+          equipment: config.equipment,
+          remarks: currentCumPercent === 100 ? "COMPLETED" : "ON GOING",
+          createdAt: `${dateStr}T09:00:00.000Z`
+        };
+
+        // Write to Firestore
+        try {
+          await setDoc(doc(firestoreDb, "submissions", recordId), newRecord);
+        } catch (dbError) {
+          console.warn(`Failed writing seeded record ${recordId} to Firestore:`, dbError);
+        }
+        newRecords.push({ id: recordId, ...newRecord });
+      }
+    }
+
+    // Merge into local cache (remove any old seed-june- records first)
+    const filteredOriginals = seededSubmissions.filter((s: any) => !s.id.startsWith("seed-june-"));
+    const finalSubmissions = [...filteredOriginals, ...newRecords];
+    
+    await fs.writeFile(DATA_FILE, JSON.stringify(finalSubmissions, null, 2), "utf-8");
+    console.log(`Successfully seeded ${newRecords.length} progress monitoring records for June 2026 in Firestore and cache.`);
+  } catch (error) {
+    console.error("Error in seedJuneProgressMonitoring:", error);
+  }
+}
+
 // Setup Vite or production build serving
 async function setupVite() {
   // Sync separate daily and monthly ledger records on startup
   try {
+    await seedJuneProgressMonitoring();
     await syncSeparateFiles();
   } catch (syncError) {
     console.error("Failed to run initial syncSeparateFiles:", syncError);

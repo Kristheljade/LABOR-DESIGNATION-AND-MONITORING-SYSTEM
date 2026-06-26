@@ -9,6 +9,13 @@ export interface Submission {
   reassignedTask: string;
   createdAt: string;
   attendanceStatus?: string;
+  activityName?: string;
+  workCompletedPercent?: string;
+  targetDate?: string;
+  workCompletedTodayPercent?: string;
+  noOfLaborSubcontractor?: string;
+  equipment?: string;
+  remarks?: string;
 }
 
 export interface VerificationResponse {

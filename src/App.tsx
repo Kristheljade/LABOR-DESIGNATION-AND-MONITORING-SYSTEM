@@ -10,6 +10,9 @@ import {
   Calendar, 
   MapPin, 
   User, 
+  Users,
+  Wrench,
+  Clock,
   HardHat, 
   ClipboardCheck, 
   LogOut, 
@@ -31,7 +34,8 @@ import {
   X,
   Edit,
   Eye,
-  Heart
+  Heart,
+  Printer
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -449,7 +453,7 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
 export default function App() {
   // Navigation & authentication state
   const [currentView, setCurrentView] = useState<"form" | "admin">("form");
-  const [adminTab, setAdminTab] = useState<"ledger" | "labor_codes" | "security">("ledger");
+  const [adminTab, setAdminTab] = useState<"ledger" | "monitoring" | "labor_codes" | "security">("ledger");
   const [passcode, setPasscode] = useState<string>("");
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>("");
@@ -486,9 +490,17 @@ export default function App() {
     customReassignedTask: "",
     laborCode: "",
     attendanceStatus: "Present",
+    activityName: "",
+    workCompletedPercent: "",
+    targetDate: "",
+    workCompletedTodayPercent: "",
+    noOfLaborSubcontractor: "",
+    equipment: "",
+    remarks: "",
   });
 
   // Submission UX state
+  const [activeFormTab, setActiveFormTab] = useState<"attendance" | "monitoring">("attendance");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submitSuccess, setSubmitSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string>("");
@@ -557,6 +569,7 @@ export default function App() {
   const [isSavingProjectCode, setIsSavingProjectCode] = useState(false);
   const [saveProjectCodeError, setSaveProjectCodeError] = useState("");
   const [projectCodeSearch, setProjectCodeSearch] = useState("");
+  const [projectToDelete, setProjectToDelete] = useState<string>("");
 
   // Editing state for Project Mapping Ledger
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -565,10 +578,34 @@ export default function App() {
   const [editProjectLocation, setEditProjectLocation] = useState("");
   const [laborCodesSubTab, setLaborCodesSubTab] = useState<"labor_codes" | "project_codes">("labor_codes");
   
+  // New States for Progress Monitoring row editing and single sheet viewing
+  const [editingProgressId, setEditingProgressId] = useState<string | null>(null);
+  const [editProgressForm, setEditProgressForm] = useState({
+    activityName: "",
+    workCompletedPercent: "",
+    targetDate: "",
+    workCompletedTodayPercent: "",
+    noOfLaborSubcontractor: "",
+    equipment: "",
+    remarks: ""
+  });
+
+  const [viewingProgressSheet, setViewingProgressSheet] = useState<{
+    isOpen: boolean;
+    projectCode: string;
+    projectName: string;
+    projectLocation: string;
+    date: string;
+    records: Submission[];
+  } | null>(null);
+  
   // Table search and filters
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("ALL");
   const [selectedDesignationFilter, setSelectedDesignationFilter] = useState<string>("ALL");
+  const [monitoringSearchTerm, setMonitoringSearchTerm] = useState<string>("");
+  const [monitoringProjectFilter, setMonitoringProjectFilter] = useState<string>("ALL");
+  const [selectedMonitoringDate, setSelectedMonitoringDate] = useState<string>("");
 
   // Custom dialog and notification states to bypass sandboxed iframe issues with confirm/alert
   const [confirmState, setConfirmState] = useState<{
@@ -682,12 +719,18 @@ export default function App() {
     fetchProjectCodes();
   }, []);
 
-  // Fetch admin logs whenever admin view is active or authenticated
+  // Fetch admin logs whenever admin view is active or authenticated, with real-time short polling updates
   useEffect(() => {
     if (isAuthenticated || currentView === "admin") {
       fetchSubmissions();
       fetchLaborCodes();
       fetchProjectCodes();
+
+      const interval = setInterval(() => {
+        fetchSubmissions();
+      }, 8000); // Poll every 8 seconds for real-time updates
+
+      return () => clearInterval(interval);
     }
   }, [isAuthenticated, currentView]);
 
@@ -1149,43 +1192,86 @@ export default function App() {
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Core validations
-    if (!formData.laborsName.trim()) {
-      setSubmitError("Please fill in the Labor's Name.");
+    // Core validations based on activeFormTab
+    let payload: any = {
+      date: formData.date,
+      project: formData.project.trim().toUpperCase(),
+      projectLocation: formData.projectLocation.trim().toUpperCase(),
+      siteEngineer: formData.siteEngineer.trim().toUpperCase(),
+    };
+
+    if (!payload.project) {
+      setSubmitError("Please specify the Project Code.");
       return;
     }
 
-    const actualDesignation = formData.designation === "OTHER" 
-      ? formData.customDesignation.trim() 
-      : formData.designation;
-
-    const actualReassignedTask = formData.reassignedTask === "OTHER" 
-      ? formData.customReassignedTask.trim() 
-      : formData.reassignedTask;
-
-    if (!actualDesignation) {
-      setSubmitError("Please specify the Labor Designation.");
+    if (!payload.siteEngineer) {
+      setSubmitError("Please specify the Site Engineer.");
       return;
     }
 
-    if (!actualReassignedTask) {
-      setSubmitError("Please specify the Reassigned Task.");
-      return;
+    if (activeFormTab === "attendance") {
+      if (!formData.laborsName.trim()) {
+        setSubmitError("Please fill in the Labor's Name.");
+        return;
+      }
+
+      const actualDesignation = formData.designation === "OTHER" 
+        ? formData.customDesignation.trim() 
+        : formData.designation;
+
+      const actualReassignedTask = formData.reassignedTask === "OTHER" 
+        ? formData.customReassignedTask.trim() 
+        : formData.reassignedTask;
+
+      if (!actualDesignation) {
+        setSubmitError("Please specify the Labor Designation.");
+        return;
+      }
+
+      if (!actualReassignedTask) {
+        setSubmitError("Please specify the Reassigned Task.");
+        return;
+      }
+
+      payload = {
+        ...payload,
+        laborsName: formData.laborsName.trim().toUpperCase(),
+        designation: actualDesignation.toUpperCase(),
+        reassignedTask: actualReassignedTask.toUpperCase(),
+        attendanceStatus: formData.attendanceStatus,
+        activityName: "",
+        workCompletedPercent: "",
+        targetDate: "",
+        workCompletedTodayPercent: "",
+        noOfLaborSubcontractor: "",
+        equipment: "",
+      };
+    } else {
+      // "monitoring" tab
+      if (!formData.activityName.trim()) {
+        setSubmitError("Please specify the Name of Activity.");
+        return;
+      }
+
+      payload = {
+        ...payload,
+        laborsName: "",
+        designation: "",
+        reassignedTask: "",
+        attendanceStatus: "Present",
+        activityName: formData.activityName.trim().toUpperCase(),
+        workCompletedPercent: formData.workCompletedPercent.trim(),
+        targetDate: formData.targetDate.trim(),
+        workCompletedTodayPercent: formData.workCompletedTodayPercent.trim(),
+        noOfLaborSubcontractor: formData.noOfLaborSubcontractor.trim(),
+        equipment: formData.equipment.trim().toUpperCase(),
+        remarks: formData.remarks.trim().toUpperCase(),
+      };
     }
 
     setIsSubmitting(true);
     setSubmitError("");
-
-    const payload = {
-      date: formData.date,
-      project: formData.project.trim().toUpperCase(),
-      laborsName: formData.laborsName.trim().toUpperCase(),
-      designation: actualDesignation.toUpperCase(),
-      projectLocation: formData.projectLocation.trim().toUpperCase(),
-      siteEngineer: formData.siteEngineer.trim().toUpperCase(),
-      reassignedTask: actualReassignedTask.toUpperCase(),
-      attendanceStatus: formData.attendanceStatus,
-    };
 
     try {
       const res = await fetch("/api/submissions", {
@@ -1196,7 +1282,7 @@ export default function App() {
 
       if (res.ok) {
         setSubmitSuccess(true);
-        setLastSubmittedName(payload.laborsName);
+        setLastSubmittedName(activeFormTab === "attendance" ? payload.laborsName : payload.activityName);
         // Reset name block and task, keep project config to allow rapid logging of next worker
         setFormData(prev => ({
           ...prev,
@@ -1205,10 +1291,18 @@ export default function App() {
           customReassignedTask: "",
           laborCode: "",
           attendanceStatus: "Present",
+          activityName: "",
+          workCompletedPercent: "",
+          targetDate: "",
+          workCompletedTodayPercent: "",
+          noOfLaborSubcontractor: "",
+          equipment: "",
+          remarks: "",
         }));
         setMatchedLaborName("");
-        // Also refresh the separate daily and monthly ledger files list in the background
+        // Also refresh the separate daily and monthly ledger files list and submissions in the background
         fetchLedgerFiles();
+        fetchSubmissions();
       } else {
         const errorData = await res.json();
         setSubmitError(errorData.error || "Failed to submit entry. Please try again.");
@@ -1474,6 +1568,56 @@ export default function App() {
     });
   };
 
+  const handleDeleteProjectDailySheet = (projectCode: string, dateStr: string) => {
+    const combinedProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+    const projectInfo = combinedProjectCodes.find(pc => pc.code.toUpperCase() === projectCode.toUpperCase());
+    const projectName = projectInfo ? projectInfo.name : `${projectCode} PROJECT`;
+
+    const matchingRecords = submissions.filter(s => 
+      s.project.toUpperCase().trim() === projectCode.toUpperCase().trim() && 
+      (s.date || "UNKNOWN") === dateStr
+    );
+
+    if (matchingRecords.length === 0) {
+      showNotification("Error", "No records found for the selected project and date.", "error");
+      return;
+    }
+
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Project Daily Sheet",
+      message: `Are you sure you want to permanently delete the entire Daily Progress Log Sheet for project ${projectCode} (${projectName}) on ${dateStr}? This will delete all ${matchingRecords.length} activity records in this sheet. This cannot be undone.`,
+      confirmText: "Yes, Delete Entire Sheet",
+      onConfirm: async () => {
+        try {
+          // Delete all records in parallel
+          const deletePromises = matchingRecords.map(r => 
+            fetch(`/api/submissions/${r.id}`, { method: "DELETE" })
+          );
+          const results = await Promise.all(deletePromises);
+          const allSuccessful = results.every(res => res.ok);
+
+          if (allSuccessful) {
+            // Update state
+            setSubmissions(prev => prev.filter(s => 
+              !(s.project.toUpperCase().trim() === projectCode.toUpperCase().trim() && (s.date || "UNKNOWN") === dateStr)
+            ));
+            showNotification("Success", `Daily Progress Log Sheet for ${projectCode} on ${dateStr} deleted successfully.`, "success");
+            fetchLedgerFiles();
+          } else {
+            // Partial success or failure - refetch
+            await fetchSubmissions();
+            showNotification("Warning", "Some records could not be deleted. Refreshing list.", "info");
+          }
+        } catch (error) {
+          showNotification("Error", "Network error while deleting project daily sheet.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
   // Excel UTF-8 safe CSV Downloader
   const downloadCSV = () => {
     window.open("/api/export", "_blank");
@@ -1615,13 +1759,370 @@ export default function App() {
     }
   };
 
+  // Dedicated CSV Exporter for Daily Activity & Progress Monitoring Logs
+  const downloadMonitoringCSV = (filteredLogs: Submission[]) => {
+    const BOM = "\uFEFF";
+    let csvContent = BOM + '"DATE","PROJECT","SITE LOCATION","SITE ENGINEER","ACTIVITY NAME","TARGET DATE","% WORK COMPLETED (CUMULATIVE)","% WORK COMPLETED TODAY","LABORS/SUB-CONTRACTORS","EQUIPMENT"\n';
+
+    for (const s of filteredLogs) {
+      const row = [
+        s.date,
+        s.project,
+        s.projectLocation || "",
+        s.siteEngineer || "",
+        s.activityName || "",
+        s.targetDate || "",
+        s.workCompletedPercent || "",
+        s.workCompletedTodayPercent || "",
+        s.noOfLaborSubcontractor || "",
+        s.equipment || ""
+      ].map(val => {
+        const clean = (val || "").replace(/"/g, '""');
+        return `"${clean}"`;
+      }).join(",");
+      csvContent += row + "\n";
+    }
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `daily_activity_monitoring_log_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Helper to export a single sheet as CSV
+  const exportSingleProgressSheetCSV = (projectCode: string, projectName: string, date: string, records: Submission[]) => {
+    const BOM = "\uFEFF";
+    let csvContent = BOM + `"DAILY PROGRESS LOG SHEET - ${projectName.toUpperCase()}"\n`;
+    csvContent += `"PROJECT CODE","${projectCode}"\n`;
+    csvContent += `"DATE","${date}"\n\n`;
+    
+    csvContent += '"S/NO.","NAME OF ACTIVITY","% WORK COMPLETED (CUMULATIVE)","TARGET DATE","WORK COMPLETED TODAY","NO. LABOR / SUBCONTRACTOR","EQUIPMENT","REMARKS"\n';
+
+    records.forEach((s, idx) => {
+      const row = [
+        (idx + 1).toString(),
+        s.activityName || "",
+        s.workCompletedPercent ? `${s.workCompletedPercent}%` : "0%",
+        s.targetDate || "",
+        s.workCompletedTodayPercent ? `+${s.workCompletedTodayPercent}%` : "",
+        s.noOfLaborSubcontractor || "",
+        s.equipment || "",
+        s.remarks || ""
+      ].map(val => {
+        const clean = (val || "").replace(/"/g, '""');
+        return `"${clean}"`;
+      }).join(",");
+      csvContent += row + "\n";
+    });
+
+    const totalLabors = records.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0) || 0;
+    csvContent += `"","TOTAL ACTIVITIES: ${records.length}","","","","TOTAL LABORS: ${totalLabors}","",""\n`;
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Progress_Sheet_${projectCode}_${date}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification("Export Successful", `CSV generated for Project ${projectCode} on ${date}.`, "success");
+  };
+
+  // Helper to export a single sheet as PDF
+  const exportSingleProgressSheetPDF = async (projectCode: string, projectName: string, date: string, records: Submission[]) => {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const autoTableFn = autoTableModule.default;
+
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "mm",
+        format: "a4"
+      });
+
+      // Header Brand bar styling
+      doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
+      doc.rect(0, 0, 297, 40, "F");
+
+      // Corporate Header Texts
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 12);
+
+      doc.setFont("Helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(203, 213, 225); // slate-300
+      doc.text("DAILY ACTIVITY & PROGRESS MONITORING SHEET", 15, 20);
+      
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text(`PROJECT: ${projectName.toUpperCase()}`, 15, 26);
+      doc.text(`CODE: ${projectCode} | DATE: ${date}`, 15, 31);
+
+      doc.setFont("Helvetica", "italic");
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.text(`Generated on: ${new Date().toLocaleString()}`, 15, 36);
+
+      const tableColumns = [
+        "S/NO.",
+        "NAME OF ACTIVITY",
+        "% WORK COMPLETED (CUMULATIVE)",
+        "TARGET DATE",
+        "WORK COMPLETED TODAY",
+        "NO. LABOR / SUBCONTRACTOR",
+        "EQUIPMENT",
+        "REMARKS"
+      ];
+
+      const tableRows = records.map((s, idx) => [
+        idx + 1,
+        s.activityName || "-",
+        s.workCompletedPercent ? `${s.workCompletedPercent}%` : "0%",
+        s.targetDate || "-",
+        s.workCompletedTodayPercent ? `+${s.workCompletedTodayPercent}%` : "-",
+        s.noOfLaborSubcontractor || "-",
+        s.equipment || "-",
+        s.remarks || "-"
+      ]);
+
+      // Append total summary row
+      const totalLabors = records.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0) || 0;
+      tableRows.push([
+        "",
+        "TOTAL ACTIVITIES: " + records.length,
+        "",
+        "",
+        "",
+        "TOTAL LABORS: " + totalLabors,
+        "",
+        ""
+      ]);
+
+      const tableOptions = {
+        startY: 45,
+        head: [tableColumns],
+        body: tableRows,
+        theme: "grid" as const,
+        headStyles: {
+          fillColor: [31, 78, 120] as [number, number, number], // #1F4E78 steel blue
+          textColor: 255,
+          fontSize: 8,
+          fontStyle: "bold" as const,
+          halign: "center" as const
+        },
+        bodyStyles: {
+          fontSize: 8,
+          textColor: 50
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252] as [number, number, number] // slate-50
+        },
+        columnStyles: {
+          0: { cellWidth: 15, halign: "center" as const }, // S/No.
+          1: { cellWidth: 65, fontStyle: "bold" as const }, // Activity Name
+          2: { cellWidth: 35, halign: "center" as const }, // Cumulative
+          3: { cellWidth: 25, halign: "center" as const }, // Target Date
+          4: { cellWidth: 30, halign: "center" as const }, // Today
+          5: { cellWidth: 35, halign: "center" as const }, // Labor
+          6: { cellWidth: 35 }, // Equipment
+          7: { cellWidth: 40 }  // Remarks
+        },
+        styles: {
+          cellPadding: 2.5,
+          lineColor: [226, 232, 240] as [number, number, number], // slate-200
+          lineWidth: 0.1,
+          font: "Helvetica"
+        },
+        margin: { left: 15, right: 15 }
+      };
+
+      if (typeof autoTableFn === "function") {
+        autoTableFn(doc, tableOptions);
+      } else if (typeof (doc as any).autoTable === "function") {
+        (doc as any).autoTable(tableOptions);
+      } else {
+        throw new Error("jsPDF AutoTable is not correctly initialized.");
+      }
+
+      doc.save(`Progress_Sheet_${projectCode}_${date}.pdf`);
+      showNotification("Export Successful", `PDF generated for Project ${projectCode} on ${date}.`, "success");
+    } catch (err) {
+      console.error("Single sheet PDF generation failed:", err);
+      showNotification("Export Failed", "Encountered an issue compiling the PDF document.", "error");
+    }
+  };
+
+  // Handle saving an edited activity row in progress monitoring
+  const handleSaveProgressEdit = async (id: string) => {
+    try {
+      const res = await fetch(`/api/submissions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editProgressForm),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setSubmissions(prev => prev.map(s => s.id === id ? data.entry : s));
+        setEditingProgressId(null);
+        showNotification("Record Updated", "The activity progress entry was updated successfully.", "success");
+        // Also update open viewing sheet records if viewing
+        if (viewingProgressSheet && viewingProgressSheet.isOpen) {
+          setViewingProgressSheet(prev => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              records: prev.records.map(r => r.id === id ? data.entry : r)
+            };
+          });
+        }
+      } else {
+        const err = await res.json();
+        showNotification("Update Failed", err.error || "Could not update the record.", "error");
+      }
+    } catch (error) {
+      console.error("Failed to update progress monitoring record:", error);
+      showNotification("Update Failed", "A network error occurred while updating the record.", "error");
+    }
+  };
+
+  // Dedicated PDF Exporter for Daily Activity & Progress Monitoring Logs
+  const exportMonitoringPDF = async (filteredLogs: Submission[]) => {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const autoTableFn = autoTableModule.default;
+
+      const doc = new jsPDF({
+        orientation: "landscape",
+        unit: "mm",
+        format: "a4"
+      });
+
+      // Header Brand bar styling
+      doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
+      doc.rect(0, 0, 297, 40, "F");
+
+      // Corporate Header Texts
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 14);
+
+      doc.setFont("Helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(203, 213, 225); // slate-300
+      doc.text("DAILY ACTIVITY & PROGRESS MONITORING REPORT", 15, 22);
+      doc.text("DOCUMENT CONTROLLER SECURE MONITORING DATABASE", 15, 27);
+
+      doc.setFont("Helvetica", "italic");
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.text(`Generated on: ${new Date().toLocaleString()}`, 15, 33);
+      doc.text(`Total Monitored Records: ${filteredLogs.length}`, 220, 33);
+
+      const tableColumns = [
+        "DATE",
+        "PROJECT",
+        "SITE ENGINEER",
+        "ACTIVITY NAME",
+        "TARGET DATE",
+        "CUMULATIVE %",
+        "TODAY %",
+        "LABORS",
+        "EQUIPMENT",
+        "REMARKS"
+      ];
+
+      const tableRows = filteredLogs.map((s) => [
+        s.date || "-",
+        s.project || "-",
+        s.siteEngineer || "-",
+        s.activityName || "-",
+        s.targetDate || "-",
+        s.workCompletedPercent ? `${s.workCompletedPercent}%` : "-",
+        s.workCompletedTodayPercent ? `${s.workCompletedTodayPercent}%` : "-",
+        s.noOfLaborSubcontractor || "-",
+        s.equipment || "-",
+        s.remarks || "-"
+      ]);
+
+      const tableOptions = {
+        head: [tableColumns],
+        body: tableRows,
+        startY: 46,
+        theme: "striped" as const,
+        headStyles: {
+          fillColor: [15, 23, 42] as [number, number, number], // slate-900 (#0F172A)
+          textColor: [255, 255, 255] as [number, number, number],
+          fontSize: 8,
+          fontStyle: "bold" as const,
+          halign: "left" as const
+        },
+        bodyStyles: {
+          fontSize: 8,
+          textColor: [51, 65, 85] as [number, number, number] // slate-700
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252] as [number, number, number] // slate-50
+        },
+        columnStyles: {
+          0: { cellWidth: 20 }, // Date
+          1: { cellWidth: 25 }, // Project
+          2: { cellWidth: 25 }, // Site Eng
+          3: { cellWidth: 40 }, // Activity
+          4: { cellWidth: 22 }, // Target Date
+          5: { cellWidth: 20 }, // Cumulative %
+          6: { cellWidth: 20 }, // Today %
+          7: { cellWidth: 15 }, // Labors
+          8: { cellWidth: 35 }, // Equipment
+          9: { cellWidth: 45 }  // Remarks
+        },
+        styles: {
+          cellPadding: 2.5,
+          lineColor: [226, 232, 240] as [number, number, number], // slate-200
+          lineWidth: 0.1,
+          font: "Helvetica",
+          valign: "middle" as const,
+          overflow: "linebreak" as const
+        }
+      };
+
+      if (typeof autoTableFn === "function") {
+        autoTableFn(doc, tableOptions);
+      } else if (typeof (doc as any).autoTable === "function") {
+        (doc as any).autoTable(tableOptions);
+      } else {
+        throw new Error("jsPDF AutoTable is not correctly initialized.");
+      }
+
+      doc.save(`daily_activity_monitoring_report_${new Date().toISOString().split("T")[0]}.pdf`);
+    } catch (err) {
+      console.error("Failed to export PDF:", err);
+      alert("Error generating PDF document.");
+    }
+  };
+
   // Pre-fill helper
   const quickSetField = (field: "project" | "projectLocation" | "siteEngineer", value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
-  // Log calculation properties
+  // Log calculation properties (Filter out progress monitoring records from Labor Attendance)
   const filteredSubmissions = submissions.filter(s => {
+    const hasLaborName = !!(s.laborsName && s.laborsName.trim());
+    if (!hasLaborName) return false;
+
     const matchesSearch = 
       s.laborsName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.project.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1634,17 +2135,25 @@ export default function App() {
     return matchesSearch && matchesProject && matchesDesignation;
   });
 
-  // Extract unique active projects & designations for sidebar filter dropdowns
-  const uniqueProjects = Array.from(new Set(submissions.map(s => s.project)));
-  const uniqueDesignations = Array.from(new Set(submissions.map(s => s.designation)));
+  // Extract unique active projects & designations for sidebar filter dropdowns (only for Labor Attendance)
+  const uniqueProjects = Array.from(new Set(
+    submissions
+      .filter(s => s.laborsName && s.laborsName.trim() && s.project && s.project.trim())
+      .map(s => s.project)
+  ));
+  const uniqueDesignations = Array.from(new Set(
+    submissions
+      .filter(s => s.laborsName && s.laborsName.trim() && s.designation && s.designation.trim())
+      .map(s => s.designation)
+  ));
 
-  // Grouped stats for admin visualization cards
-  const totalLoggedWorkers = submissions.length;
+  // Grouped stats for admin visualization cards (Labor Attendance only)
+  const totalLoggedWorkers = submissions.filter(s => s.laborsName && s.laborsName.trim()).length;
   
   // Stats - Project and task distribution counts
   const projectCounts: { [key: string]: number } = {};
   const designationCounts: { [key: string]: number } = {};
-  submissions.forEach(s => {
+  submissions.filter(s => s.laborsName && s.laborsName.trim()).forEach(s => {
     projectCounts[s.project] = (projectCounts[s.project] || 0) + 1;
     designationCounts[s.designation] = (designationCounts[s.designation] || 0) + 1;
   });
@@ -1769,23 +2278,68 @@ export default function App() {
         {/* PUBLIC FORM VIEW */}
         {currentView === "form" && (
           <div id="form-container" className="max-w-5xl mx-auto bg-white rounded-3xl shadow-[0_20px_25px_-5px_rgba(0,0,0,0.05),0_10px_10px_-5px_rgba(0,0,0,0.02)] border border-slate-200/60 overflow-hidden">
-            <div className="bg-slate-50 border-b border-slate-100 px-6 py-5 flex items-center justify-between">
+            <div className="bg-slate-50 border-b border-slate-100 px-6 py-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex items-center gap-2">
-                <FileSpreadsheet className="h-5 w-5 text-slate-600" />
-                <h2 className="font-semibold text-slate-800 uppercase tracking-wider text-sm font-sans">Daily Log Sheet Form</h2>
+                <FileSpreadsheet className="h-5 w-5 text-slate-700" />
+                <h2 className="font-bold text-slate-800 uppercase tracking-wider text-sm font-sans">
+                  {activeFormTab === "attendance" ? "Daily Labor Attendance Form" : "Daily Progress Monitoring Form"}
+                </h2>
               </div>
-              <span className="text-[10px] font-mono bg-slate-200/80 text-slate-700 px-2.5 py-1 rounded-full font-medium">ENGINEERS FILL FORM</span>
+              
+              {/* Form Selection Tabs */}
+              <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl">
+                <button
+                  id="tab-btn-attendance"
+                  type="button"
+                  onClick={() => {
+                    setActiveFormTab("attendance");
+                    setSubmitSuccess(false);
+                    setSubmitError("");
+                  }}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
+                    activeFormTab === "attendance"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  Labor Attendance
+                </button>
+                <button
+                  id="tab-btn-monitoring"
+                  type="button"
+                  onClick={() => {
+                    setActiveFormTab("monitoring");
+                    setSubmitSuccess(false);
+                    setSubmitError("");
+                  }}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
+                    activeFormTab === "monitoring"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  Progress Monitoring
+                </button>
+              </div>
             </div>
 
             <div className="p-6 md:p-10">
               {submitSuccess ? (
-                <div id="success-panel" className="py-12 text-center flex flex-col items-center justify-center">
+                <div id="success-panel" className="py-12 text-center flex flex-col items-center justify-center animate-fade-in">
                   <div className="bg-emerald-50 text-emerald-600 p-4 rounded-full mb-4">
                     <CheckCircle2 className="h-16 w-16" />
                   </div>
                   <h3 className="text-2xl font-bold font-display text-emerald-800">Record Saved Successfully!</h3>
-                  <p className="text-slate-600 mt-2 max-w-md">
-                    The labor entry for <strong className="text-slate-900 font-mono text-lg bg-slate-100 px-2 py-0.5 rounded">{lastSubmittedName}</strong> has been secured in your private database.
+                  <p className="text-slate-600 mt-2 max-w-md text-sm">
+                    {activeFormTab === "attendance" ? (
+                      <>
+                        The labor entry for <strong className="text-slate-900 font-mono text-lg bg-slate-100 px-2 py-0.5 rounded">{lastSubmittedName}</strong> has been secured in your private database.
+                      </>
+                    ) : (
+                      <>
+                        The daily activity monitoring details for <strong className="text-slate-900 font-mono text-lg bg-slate-100 px-2 py-0.5 rounded">{lastSubmittedName}</strong> have been secured in your private database.
+                      </>
+                    )}
                   </p>
                   
                   <div className="mt-8 flex flex-col sm:flex-row gap-3">
@@ -1794,7 +2348,7 @@ export default function App() {
                       onClick={() => setSubmitSuccess(false)}
                       className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-sm font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
                     >
-                      Log Another Labor Record
+                      {activeFormTab === "attendance" ? "Log Another Labor Record" : "Log Another Progress Record"}
                     </button>
                   </div>
                 </div>
@@ -1807,15 +2361,17 @@ export default function App() {
                     </div>
                   )}
 
-                  <p className="text-xs text-slate-400 pb-6 border-b border-slate-100">
-                    Provide accurate field details. All entries are instantly secured in the document controller ledger, restricted exclusively to authorized personnel.
+                  <p className="text-xs text-slate-400 pb-4 border-b border-slate-100">
+                    Provide accurate details. All entries are instantly secured in the document controller ledger, restricted exclusively to authorized personnel.
                   </p>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                  {/* SECTION 1: GENERAL METADATA HEADER (SHARED BY BOTH FORMS) */}
+                  <div className="bg-slate-50/55 p-5 rounded-2xl border border-slate-100 space-y-4">
+                    <h3 className="text-2xs font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5 mb-2">
+                      <Layers className="h-3.5 w-3.5 text-slate-400" /> General Info Headers
+                    </h3>
                     
-                    {/* LEFT COLUMN */}
-                    <div className="space-y-6">
-                      
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {/* DATE */}
                       <div className="flex flex-col">
                         <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
@@ -1827,7 +2383,7 @@ export default function App() {
                           required
                           value={formData.date}
                           onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 transition-all"
+                          className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-medium text-slate-800 transition-all"
                         />
                       </div>
 
@@ -1865,7 +2421,7 @@ export default function App() {
                           className={`w-full border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none text-sm font-semibold transition-all uppercase ${
                             (projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).some(pc => pc.code.toUpperCase() === formData.project.toUpperCase().trim())
                               ? "bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200" 
-                              : "bg-slate-50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
+                              : "bg-white text-slate-800 focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
                           }`}
                         />
                       </div>
@@ -1886,150 +2442,281 @@ export default function App() {
                         allowCustom
                         containerId="select-engineer-container"
                       />
-
                     </div>
+                  </div>
 
-                    {/* RIGHT COLUMN */}
-                    <div className="space-y-6">
-                      
-                      {/* LABOR CODE */}
-                      <SearchableDropdown
-                        id="select-labor-code"
-                        label="Select Labor Code"
-                        icon={<Key className="h-3.5 w-3.5 text-slate-400" />}
-                        placeholder="Search or enter Labor Code..."
-                        options={(laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES).map(lc => ({
-                          value: lc.code,
-                          label: lc.name
-                        }))}
-                        value={formData.laborCode}
-                        onChange={(val) => handleLaborCodeChange(val)}
-                        required
-                        allowCustom
-                        containerId="select-labor-code-container"
-                        onlyDisplayValue
-                      />
-                      {formData.laborCode && (
-                        <div className="mt-2 text-right">
-                          {matchedLaborName ? (
-                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold font-mono">
-                              ✓ {matchedLaborName} MATCHED
-                            </span>
-                          ) : (
-                            <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold font-mono">
-                              NO MATCH
-                            </span>
+                  {/* SECTION 2: FORM DEPENDENT FIELDS */}
+                  {activeFormTab === "attendance" ? (
+                    /* LABOR ATTENDANCE FORM FIELDS */
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="border-b border-slate-100 pb-2">
+                        <h3 className="text-xs font-semibold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                          <HardHat className="h-4 w-4 text-slate-600" /> Labor Attendance Log
+                        </h3>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* LABOR CODE */}
+                        <div className="space-y-1">
+                          <SearchableDropdown
+                            id="select-labor-code"
+                            label="Select Labor Code"
+                            icon={<Key className="h-3.5 w-3.5 text-slate-400" />}
+                            placeholder="Search or enter Labor Code..."
+                            options={(laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES).map(lc => ({
+                              value: lc.code,
+                              label: lc.name
+                            }))}
+                            value={formData.laborCode}
+                            onChange={(val) => handleLaborCodeChange(val)}
+                            required
+                            allowCustom
+                            containerId="select-labor-code-container"
+                            onlyDisplayValue
+                          />
+                          {formData.laborCode && (
+                            <div className="mt-2 text-right">
+                              {matchedLaborName ? (
+                                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold font-mono">
+                                  ✓ {matchedLaborName} MATCHED
+                                </span>
+                              ) : (
+                                <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold font-mono">
+                                  NO MATCH
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
 
-                      {/* LABOR'S NAME */}
-                      <div className="flex flex-col">
-                        <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
-                          <User className="h-3.5 w-3.5 text-slate-400" /> Labor's Full Name
-                        </label>
-                        <input
-                          id="input-labors-name"
-                          type="text"
-                          placeholder={matchedLaborName ? "Auto-filled from Labor Code" : "Enter Labor's Full Name..."}
-                          value={formData.laborsName}
-                          onChange={(e) => setFormData(prev => ({ ...prev, laborsName: e.target.value }))}
-                          readOnly={!!matchedLaborName}
-                          className={`w-full border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none text-sm font-semibold transition-all uppercase ${
-                            matchedLaborName
-                              ? "bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200"
-                              : "bg-slate-50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
-                          }`}
+                        {/* LABOR'S NAME */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <User className="h-3.5 w-3.5 text-slate-400" /> Labor's Full Name
+                          </label>
+                          <input
+                            id="input-labors-name"
+                            type="text"
+                            placeholder={matchedLaborName ? "Auto-filled from Labor Code" : "Enter Labor's Full Name..."}
+                            value={formData.laborsName}
+                            onChange={(e) => setFormData(prev => ({ ...prev, laborsName: e.target.value }))}
+                            readOnly={!!matchedLaborName}
+                            className={`w-full border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none text-sm font-semibold transition-all uppercase ${
+                              matchedLaborName
+                                ? "bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200"
+                                : "bg-slate-50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700"
+                            }`}
+                          />
+                        </div>
+
+                        {/* DESIGNATION */}
+                        <SearchableDropdown
+                          id="select-designation"
+                          label="Designation / Trade"
+                          icon={<HardHat className="h-3.5 w-3.5 text-slate-400" />}
+                          placeholder="Search or enter custom designation..."
+                          options={DESIGNATIONS.map(role => ({
+                            value: role,
+                            label: role
+                          }))}
+                          value={formData.designation === "OTHER" ? formData.customDesignation : formData.designation}
+                          onChange={(val) => handleDesignationChange(val)}
+                          required
+                          allowCustom
+                          containerId="select-designation-container"
+                        />
+
+                        {/* REASSIGNED TASK */}
+                        <SearchableDropdown
+                          id="select-reassigned"
+                          label="Active Assigned Task"
+                          icon={<ClipboardCheck className="h-3.5 w-3.5 text-slate-400" />}
+                          placeholder="Search or enter custom task..."
+                          options={COMMON_TASKS.map(task => ({
+                            value: task,
+                            label: task
+                          }))}
+                          value={formData.reassignedTask === "OTHER" ? formData.customReassignedTask : formData.reassignedTask}
+                          onChange={(val) => handleTaskChange(val)}
+                          required
+                          allowCustom
+                          containerId="select-reassigned-container"
                         />
                       </div>
 
-                      {/* DESIGNATION */}
-                      <SearchableDropdown
-                        id="select-designation"
-                        label="Designation / Trade"
-                        icon={<HardHat className="h-3.5 w-3.5 text-slate-400" />}
-                        placeholder="Search or enter custom designation..."
-                        options={DESIGNATIONS.map(role => ({
-                          value: role,
-                          label: role
-                        }))}
-                        value={formData.designation === "OTHER" ? formData.customDesignation : formData.designation}
-                        onChange={(val) => handleDesignationChange(val)}
-                        required
-                        allowCustom
-                        containerId="select-designation-container"
-                      />
+                      {/* ATTENDANCE STATUS SECTION */}
+                      <div className="pt-4 border-t border-slate-100">
+                        <label className="block text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5">
+                          <UserCheck className="h-3.5 w-3.5 text-slate-400" /> Labor Attendance Status
+                        </label>
+                        <div id="attendance-status-selector" className="grid grid-cols-3 gap-4 max-w-lg">
+                          <button
+                            id="attendance-btn-present"
+                            type="button"
+                            onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Present" }))}
+                            className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                              formData.attendanceStatus === "Present"
+                                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-100"
+                                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Present" ? "bg-white" : "bg-emerald-500"}`}></span>
+                            Present
+                          </button>
 
-                      {/* REASSIGNED TASK */}
-                      <SearchableDropdown
-                        id="select-reassigned"
-                        label="Active Assigned Task"
-                        icon={<ClipboardCheck className="h-3.5 w-3.5 text-slate-400" />}
-                        placeholder="Search or enter custom task..."
-                        options={COMMON_TASKS.map(task => ({
-                          value: task,
-                          label: task
-                        }))}
-                        value={formData.reassignedTask === "OTHER" ? formData.customReassignedTask : formData.reassignedTask}
-                        onChange={(val) => handleTaskChange(val)}
-                        required
-                        allowCustom
-                        containerId="select-reassigned-container"
-                      />
+                          <button
+                            id="attendance-btn-absent"
+                            type="button"
+                            onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Absent" }))}
+                            className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                              formData.attendanceStatus === "Absent"
+                                ? "bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-100"
+                                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Absent" ? "bg-white" : "bg-rose-500"}`}></span>
+                            Absent
+                          </button>
 
+                          <button
+                            id="attendance-btn-undertime"
+                            type="button"
+                            onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Under Time" }))}
+                            className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                              formData.attendanceStatus === "Under Time"
+                                ? "bg-amber-600 text-white border-amber-600 shadow-sm shadow-amber-100"
+                                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                            }`}
+                          >
+                            <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Under Time" ? "bg-white" : "bg-amber-500"}`}></span>
+                            Under Time
+                          </button>
+                        </div>
+                      </div>
                     </div>
+                  ) : (
+                    /* DAILY ACTIVITY & PROGRESS MONITORING FORM FIELDS */
+                    <div className="space-y-6 animate-fade-in">
+                      <div className="border-b border-slate-100 pb-2">
+                        <h3 className="text-xs font-semibold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                          <ClipboardCheck className="h-4 w-4 text-slate-600" /> Daily Activity & Progress Monitoring
+                        </h3>
+                      </div>
 
-                  </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {/* Name of Activity */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <Layers className="h-3.5 w-3.5 text-slate-400" /> Name of Activity
+                          </label>
+                          <input
+                            id="input-activity-name"
+                            type="text"
+                            required
+                            placeholder="e.g. CONCRETING WORKS..."
+                            value={formData.activityName}
+                            onChange={(e) => setFormData(prev => ({ ...prev, activityName: e.target.value }))}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all uppercase"
+                          />
+                        </div>
 
-                  {/* ATTENDANCE STATUS SECTION */}
-                  <div className="pt-6 border-t border-slate-100">
-                    <label className="block text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5">
-                      <UserCheck className="h-3.5 w-3.5 text-slate-400" /> Labor Attendance Status
-                    </label>
-                    <div id="attendance-status-selector" className="grid grid-cols-3 gap-4 max-w-lg">
-                      <button
-                        id="attendance-btn-present"
-                        type="button"
-                        onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Present" }))}
-                        className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
-                          formData.attendanceStatus === "Present"
-                            ? "bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-100"
-                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
-                        }`}
-                      >
-                        <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Present" ? "bg-white" : "bg-emerald-500"}`}></span>
-                        Present
-                      </button>
+                        {/* % Work Completed */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <Clock className="h-3.5 w-3.5 text-slate-400" /> % Work Completed (Cumulative)
+                          </label>
+                          <div className="relative">
+                            <input
+                              id="input-work-completed"
+                              type="text"
+                              placeholder="e.g. 75"
+                              value={formData.workCompletedPercent}
+                              onChange={(e) => setFormData(prev => ({ ...prev, workCompletedPercent: e.target.value }))}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-3.5 pr-8 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all"
+                            />
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">%</span>
+                          </div>
+                        </div>
 
-                      <button
-                        id="attendance-btn-absent"
-                        type="button"
-                        onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Absent" }))}
-                        className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
-                          formData.attendanceStatus === "Absent"
-                            ? "bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-100"
-                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
-                        }`}
-                      >
-                        <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Absent" ? "bg-white" : "bg-rose-500"}`}></span>
-                        Absent
-                      </button>
+                        {/* Target Date */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <Calendar className="h-3.5 w-3.5 text-slate-400" /> Target Date
+                          </label>
+                          <input
+                            id="input-target-date"
+                            type="date"
+                            value={formData.targetDate}
+                            onChange={(e) => setFormData(prev => ({ ...prev, targetDate: e.target.value }))}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all"
+                          />
+                        </div>
 
-                      <button
-                        id="attendance-btn-undertime"
-                        type="button"
-                        onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Under Time" }))}
-                        className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
-                          formData.attendanceStatus === "Under Time"
-                            ? "bg-amber-600 text-white border-amber-600 shadow-sm shadow-amber-100"
-                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
-                        }`}
-                      >
-                        <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Under Time" ? "bg-white" : "bg-amber-500"}`}></span>
-                        Under Time
-                      </button>
+                        {/* % Work Completed Today */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <Clock className="h-3.5 w-3.5 text-slate-400" /> % Work Completed Today
+                          </label>
+                          <div className="relative">
+                            <input
+                              id="input-completed-today"
+                              type="text"
+                              placeholder="e.g. 5"
+                              value={formData.workCompletedTodayPercent}
+                              onChange={(e) => setFormData(prev => ({ ...prev, workCompletedTodayPercent: e.target.value }))}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-3.5 pr-8 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all"
+                            />
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">%</span>
+                          </div>
+                        </div>
+
+                        {/* No. of Labor / Sub-Contractor */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <Users className="h-3.5 w-3.5 text-slate-400" /> No. of Labor / Sub-Contractor
+                          </label>
+                          <input
+                            id="input-no-of-labor"
+                            type="text"
+                            placeholder="e.g. 12"
+                            value={formData.noOfLaborSubcontractor}
+                            onChange={(e) => setFormData(prev => ({ ...prev, noOfLaborSubcontractor: e.target.value }))}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all"
+                          />
+                        </div>
+
+                        {/* Equipment */}
+                        <div className="flex flex-col">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <Wrench className="h-3.5 w-3.5 text-slate-400" /> Equipment
+                          </label>
+                          <input
+                            id="input-equipment"
+                            type="text"
+                            placeholder="e.g. CONCRETE MIXER, JACKHAMMER..."
+                            value={formData.equipment}
+                            onChange={(e) => setFormData(prev => ({ ...prev, equipment: e.target.value }))}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all uppercase"
+                          />
+                        </div>
+
+                        {/* Remarks */}
+                        <div className="flex flex-col md:col-span-2 lg:col-span-3">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <FileText className="h-3.5 w-3.5 text-slate-400" /> Remarks / Notes
+                          </label>
+                          <input
+                            id="input-remarks"
+                            type="text"
+                            placeholder="e.g. WORK COMPLETED ACCORDING TO SPECIFICATIONS..."
+                            value={formData.remarks}
+                            onChange={(e) => setFormData(prev => ({ ...prev, remarks: e.target.value }))}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all uppercase"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* SUBMIT BLOCK */}
                   <div className="pt-8 border-t border-slate-100 flex flex-col items-center">
@@ -2222,6 +2909,17 @@ export default function App() {
                       }`}
                     >
                       <FileSpreadsheet className="h-4 w-4" /> Ledger Logs Database
+                    </button>
+                    <button
+                      id="tab-monitoring"
+                      onClick={() => setAdminTab("monitoring")}
+                      className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                        adminTab === "monitoring"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                      }`}
+                    >
+                      <ClipboardCheck className="h-4 w-4" /> Activity Progress Monitoring
                     </button>
                     <button
                       id="tab-labor-codes"
@@ -2758,6 +3456,727 @@ export default function App() {
               </div>
             )}
 
+            {/* DAILY ACTIVITY & PROGRESS MONITORING DATABASE VIEW */}
+            {adminTab === "monitoring" && (() => {
+              // Get submissions that have at least one monitoring field or match search/project filters
+              const monitoringEntries = submissions.filter(s => {
+                const matchesProject = monitoringProjectFilter === "ALL" || s.project.toUpperCase() === monitoringProjectFilter.toUpperCase();
+                
+                // Generic query matching:
+                const query = monitoringSearchTerm.trim().toUpperCase();
+                const matchesSearch = !query || 
+                  (s.activityName && s.activityName.toUpperCase().includes(query)) ||
+                  (s.equipment && s.equipment.toUpperCase().includes(query)) ||
+                  (s.projectLocation && s.projectLocation.toUpperCase().includes(query)) ||
+                  (s.siteEngineer && s.siteEngineer.toUpperCase().includes(query)) ||
+                  (s.project && s.project.toUpperCase().includes(query));
+
+                // Always require at least one monitoring detail to be filled
+                const hasMonitoringData = !!(s.activityName || s.workCompletedPercent || s.targetDate || s.workCompletedTodayPercent || s.noOfLaborSubcontractor || s.equipment);
+
+                return matchesProject && matchesSearch && hasMonitoringData;
+              });
+
+              // Calculate beautiful metrics for monitoring:
+              const totalActivities = monitoringEntries.length;
+              const completedActivities = monitoringEntries.filter(s => s.workCompletedPercent === "100" || s.workCompletedPercent?.includes("100")).length;
+              
+              // Average progress calculation:
+              const progressValues = monitoringEntries
+                .map(s => parseFloat(s.workCompletedPercent || "0"))
+                .filter(val => !isNaN(val));
+              const avgProgress = progressValues.length > 0 
+                ? Math.round(progressValues.reduce((sum, val) => sum + val, 0) / progressValues.length)
+                : 0;
+
+              // Unique active equipments
+              const activeEquipmentCount = Array.from(new Set(
+                monitoringEntries
+                  .map(s => s.equipment?.toUpperCase() || "")
+                  .filter(eq => eq.trim() !== "")
+              )).length;
+
+              const uniqueProjectsList = Array.from(new Set(
+                submissions
+                  .filter(s => s.activityName && s.activityName.trim() && s.project && s.project.trim())
+                  .map(s => s.project)
+              ));
+
+              return (
+                <div id="monitoring-dashboard" className="space-y-6 animate-fadeIn">
+                  
+                  {/* Admin Header Commands */}
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-slate-50 text-slate-700 p-2.5 rounded-xl border border-slate-100">
+                        <ClipboardCheck className="h-5 w-5 text-slate-700" />
+                      </div>
+                      <div>
+                        <h2 className="text-lg font-semibold text-slate-900 font-display uppercase tracking-tight flex flex-wrap items-center gap-2">
+                          <span>Activity & Progress Monitoring Database</span>
+                          <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200 font-bold tracking-normal uppercase">
+                            ● Monitoring Sheet View
+                          </span>
+                        </h2>
+                        <p className="text-xs text-slate-400 font-mono">
+                          Live Progress logs & Construction Milestones
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                      <button
+                        id="monitoring-export-csv-btn"
+                        onClick={() => downloadMonitoringCSV(monitoringEntries)}
+                        className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-transparent text-xs font-semibold uppercase tracking-wide text-white bg-slate-900 hover:bg-slate-800 rounded-xl cursor-pointer shadow-sm transition-colors"
+                      >
+                        <Download className="h-4 w-4" /> Export CSV Sheet
+                      </button>
+
+                      <button
+                        id="monitoring-export-pdf-btn"
+                        onClick={() => exportMonitoringPDF(monitoringEntries)}
+                        className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-300 rounded-xl cursor-pointer shadow-sm transition-all duration-150"
+                      >
+                        <FileText className="h-4 w-4 text-slate-500" /> Export PDF Log
+                      </button>
+                      
+                      <button
+                        id="monitoring-refresh-btn"
+                        onClick={fetchSubmissions}
+                        disabled={isLoadingLogs}
+                        className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${isLoadingLogs ? "animate-spin" : ""}`} />
+                      </button>
+
+                      <button
+                        id="monitoring-back-btn"
+                        onClick={() => setCurrentView("form")}
+                        className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                      >
+                        <LogOut className="h-4 w-4" /> Back to Form
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Dashboard Metrics Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* METRIC 1 */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block font-mono">Monitored Tasks</span>
+                        <span className="text-2xl font-bold text-slate-800 font-display mt-1 block">{totalActivities}</span>
+                      </div>
+                      <div className="bg-slate-50 text-slate-500 p-2.5 rounded-xl border border-slate-100/80">
+                        <Layers className="h-5 w-5" />
+                      </div>
+                    </div>
+
+                    {/* METRIC 2 */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block font-mono">Average Completion</span>
+                        <span className="text-2xl font-bold text-slate-800 font-display mt-1 block">{avgProgress}%</span>
+                      </div>
+                      <div className="bg-slate-50 text-slate-500 p-2.5 rounded-xl border border-slate-100/80">
+                        <Clock className="h-5 w-5" />
+                      </div>
+                    </div>
+
+                    {/* METRIC 3 */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block font-mono">Fully Completed</span>
+                        <span className="text-2xl font-bold text-emerald-600 font-display mt-1 block">{completedActivities}</span>
+                      </div>
+                      <div className="bg-emerald-50/50 text-emerald-600 p-2.5 rounded-xl border border-emerald-100/50">
+                        <CheckCircle2 className="h-5 w-5" />
+                      </div>
+                    </div>
+
+                    {/* METRIC 4 */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block font-mono">Active Equipment types</span>
+                        <span className="text-2xl font-bold text-slate-800 font-display mt-1 block">{activeEquipmentCount}</span>
+                      </div>
+                      <div className="bg-slate-50 text-slate-500 p-2.5 rounded-xl border border-slate-100/80">
+                        <Wrench className="h-5 w-5" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Table Search & Project Filters block */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col sm:flex-row gap-4 items-center">
+                    <div className="relative w-full sm:flex-1">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        id="monitoring-search-input"
+                        type="text"
+                        placeholder="Search by Activity, Equipment, Site Engineer, Project Location..."
+                        value={monitoringSearchTerm}
+                        onChange={(e) => setMonitoringSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-medium text-slate-800 rounded-xl transition-all"
+                      />
+                      {monitoringSearchTerm && (
+                        <button
+                          onClick={() => setMonitoringSearchTerm("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="w-full sm:w-64 flex flex-col">
+                      <select
+                        id="monitoring-project-filter"
+                        value={monitoringProjectFilter}
+                        onChange={(e) => setMonitoringProjectFilter(e.target.value)}
+                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:bg-white focus:outline-none transition-all uppercase"
+                      >
+                        <option value="ALL">Filter By Project (ALL)</option>
+                        {uniqueProjectsList.map((proj) => (
+                          <option key={proj} value={proj}>{proj}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Project-separated Daily Progress Sheets */}
+                  <div className="space-y-12">
+                    {(() => {
+                      const formatDateLong = (dateStr: string) => {
+                        if (!dateStr || dateStr === "UNKNOWN") return "Unknown Date";
+                        const parts = dateStr.split("-");
+                        if (parts.length !== 3) return dateStr;
+                        const year = parts[0];
+                        const monthIdx = parseInt(parts[1], 10) - 1;
+                        const day = parseInt(parts[2], 10);
+                        const months = [
+                          "January", "February", "March", "April", "May", "June",
+                          "July", "August", "September", "October", "November", "December"
+                        ];
+                        return `${months[monthIdx] || parts[1]} ${day}, ${year}`;
+                      };
+
+                      const getMonthYear = (dateStr: string) => {
+                        if (!dateStr || dateStr === "UNKNOWN") return "Unknown Month";
+                        const parts = dateStr.split("-");
+                        if (parts.length < 2) return "Unknown Month";
+                        const year = parts[0];
+                        const monthIdx = parseInt(parts[1], 10) - 1;
+                        const months = [
+                          "January", "February", "March", "April", "May", "June",
+                          "July", "August", "September", "October", "November", "December"
+                        ];
+                        return `${months[monthIdx] || parts[1]} ${year}`;
+                      };
+
+                      const monthGroups: {
+                        [monthYear: string]: {
+                          [dateStr: string]: {
+                            [projectCode: string]: {
+                              projectName: string;
+                              projectLocation: string;
+                              records: Submission[];
+                            }
+                          }
+                        }
+                      } = {};
+
+                      monitoringEntries.forEach((r) => {
+                        const projCode = (r.project || "UNKNOWN").toUpperCase().trim();
+                        const dateVal = r.date || "UNKNOWN";
+                        const combinedProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+                        const projectInfo = combinedProjectCodes.find(pc => pc.code.toUpperCase() === projCode);
+                        const pName = projectInfo ? projectInfo.name : `${projCode} PROJECT`;
+                        const pLoc = projectInfo ? projectInfo.location : (r.projectLocation || "N/A");
+
+                        const mYear = getMonthYear(dateVal);
+
+                        if (!monthGroups[mYear]) {
+                          monthGroups[mYear] = {};
+                        }
+                        if (!monthGroups[mYear][dateVal]) {
+                          monthGroups[mYear][dateVal] = {};
+                        }
+                        if (!monthGroups[mYear][dateVal][projCode]) {
+                          monthGroups[mYear][dateVal][projCode] = {
+                            projectName: pName,
+                            projectLocation: pLoc,
+                            records: []
+                          };
+                        }
+                        monthGroups[mYear][dateVal][projCode].records.push(r);
+                      });
+
+                      const sortedMonths = Object.keys(monthGroups).sort((a, b) => {
+                        const getVal = (mStr: string) => {
+                          const pts = mStr.split(" ");
+                          if (pts.length < 2) return 0;
+                          const yr = parseInt(pts[1], 10);
+                          const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+                          const mIdx = months.indexOf(pts[0]);
+                          return yr * 12 + mIdx;
+                        };
+                        return getVal(b) - getVal(a);
+                      });
+
+                      const allAvailableDates = sortedMonths.flatMap(m => 
+                        Object.keys(monthGroups[m]).sort((a, b) => b.localeCompare(a))
+                      );
+
+                      const activeDate = selectedMonitoringDate || allAvailableDates[0] || "";
+                      const activeMonthYear = activeDate ? getMonthYear(activeDate) : "";
+                      const projectsOnActiveDate = (activeMonthYear && activeDate) ? (monthGroups[activeMonthYear]?.[activeDate] || {}) : {};
+                      const sortedActiveProjectCodes = Object.keys(projectsOnActiveDate).sort();
+
+                      if (sortedMonths.length === 0) {
+                        return (
+                          <div className="bg-white rounded-3xl p-12 text-center text-slate-400 border border-slate-200/60 font-medium text-sm">
+                            <Layers className="h-10 w-10 text-slate-300 mx-auto mb-3" />
+                            No activity progress monitoring records match your search filters.
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="flex flex-col lg:flex-row gap-6 items-start">
+                          {/* Left Column: Interactive Month & Date Browser */}
+                          <div className="w-full lg:w-80 shrink-0 space-y-4">
+                            <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-xs space-y-4">
+                              <div className="flex items-center gap-2 border-b border-slate-100 pb-2.5">
+                                <Calendar className="h-4 w-4 text-slate-500" />
+                                <span className="text-xs font-bold font-mono uppercase tracking-wider text-slate-500">
+                                  Select Daily Log Sheet
+                                </span>
+                              </div>
+
+                              <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-1">
+                                {sortedMonths.map((month) => {
+                                  const datesInMonth = Object.keys(monthGroups[month]).sort((a, b) => b.localeCompare(a));
+                                  return (
+                                    <div key={month} className="space-y-2.5">
+                                      {/* Month Year Header */}
+                                      <div className="flex items-center gap-1.5 text-slate-800 font-extrabold text-xs uppercase tracking-wider border-l-4 border-slate-900 pl-2 py-0.5 bg-slate-50 rounded-r-md">
+                                        <span>{month}</span>
+                                      </div>
+
+                                      {/* Dates list */}
+                                      <div className="space-y-2 pl-1">
+                                        {datesInMonth.map((dKey) => {
+                                          const projects = monthGroups[month][dKey];
+                                          const pCodes = Object.keys(projects).sort();
+                                          const isSelected = activeDate === dKey;
+
+                                          return (
+                                            <div key={dKey} className="space-y-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => setSelectedMonitoringDate(dKey)}
+                                                className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1.5 cursor-pointer ${
+                                                  isSelected
+                                                    ? "bg-slate-900 text-white border-transparent shadow-md font-bold"
+                                                    : "bg-white text-slate-700 border-slate-200/80 hover:border-slate-300 hover:bg-slate-50"
+                                                }`}
+                                              >
+                                                <div className="flex items-center justify-between w-full">
+                                                  <span className="text-xs font-bold font-mono tracking-tight">
+                                                    {formatDateLong(dKey)}
+                                                  </span>
+                                                  <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                                                    isSelected ? "bg-slate-800 text-slate-300 border border-slate-700" : "bg-slate-100 text-slate-500 border border-slate-200"
+                                                  }`}>
+                                                    {pCodes.length} {pCodes.length === 1 ? "project" : "projects"}
+                                                  </span>
+                                                </div>
+
+                                                {/* Projects under this date as nested items */}
+                                                <div className="pl-2 border-l border-slate-300/40 text-[10px] space-y-1 text-left">
+                                                  {pCodes.map((pCode) => {
+                                                    const proj = projects[pCode];
+                                                    return (
+                                                      <div key={pCode} className={`truncate uppercase font-medium ${isSelected ? "text-slate-300" : "text-slate-500"}`}>
+                                                        • <strong className="font-mono">{pCode}</strong> <span className="opacity-90">{proj.projectName.split("–")[0].split("-")[0]}</span>
+                                                      </div>
+                                                    );
+                                                  })}
+                                                </div>
+                                              </button>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Select Project to Delete All Records on Date */}
+                            {activeDate && sortedActiveProjectCodes.length > 0 && (
+                              <div className="bg-white rounded-3xl border border-rose-200/80 p-5 shadow-xs space-y-3 mt-4">
+                                <div className="flex items-center gap-2 border-b border-rose-100 pb-2.5 text-rose-600">
+                                  <Trash2 className="h-4 w-4 text-rose-500" />
+                                  <span className="text-xs font-bold font-mono uppercase tracking-wider">
+                                    Quick Delete Daily Sheet
+                                  </span>
+                                </div>
+                                
+                                <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                                  Select an active project code to delete its entire log sheet for <strong className="font-semibold text-slate-800">{formatDateLong(activeDate)}</strong>.
+                                </p>
+
+                                <div className="flex flex-col gap-2">
+                                  <select
+                                    id="monitoring-delete-project-select"
+                                    onChange={(e) => {
+                                      const pCode = e.target.value;
+                                      if (pCode) {
+                                        handleDeleteProjectDailySheet(pCode, activeDate);
+                                        e.target.value = ""; // Reset
+                                      }
+                                    }}
+                                    className="w-full px-3 py-2 bg-rose-50/30 border border-rose-150 rounded-xl text-xs font-semibold text-rose-800 focus:bg-white focus:outline-none transition-all uppercase cursor-pointer"
+                                  >
+                                    <option value="">-- Choose Project --</option>
+                                    {sortedActiveProjectCodes.map((pCode) => (
+                                      <option key={pCode} value={pCode}>
+                                        {pCode} - {projectsOnActiveDate[pCode].projectName}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Right Column: Active Date Project Records */}
+                          <div className="flex-1 w-full space-y-6">
+                            {activeDate ? (
+                              <>
+                                {/* Active Date Top Summary Panel */}
+                                <div className="bg-[#0F172A] p-5 rounded-3xl text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-slate-800 shadow-sm shrink-0">
+                                  <div className="flex items-center gap-3">
+                                    <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                      <Calendar className="h-6 w-6" />
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] font-mono text-emerald-400 font-bold uppercase tracking-widest block">DAILY PROGRESS OVERVIEW</span>
+                                      <h3 className="text-base font-extrabold uppercase tracking-tight font-display">
+                                        {formatDateLong(activeDate)}
+                                      </h3>
+                                    </div>
+                                  </div>
+                                  <div className="text-left sm:text-right">
+                                    <span className="text-[9px] text-slate-400 font-mono block">DATE CODE</span>
+                                    <span className="font-mono text-xs font-bold bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700">{activeDate}</span>
+                                  </div>
+                                </div>
+
+                                {/* List of Project Cards */}
+                                <div className="space-y-6">
+                                  {sortedActiveProjectCodes.map((pCode) => {
+                                    const projData = projectsOnActiveDate[pCode];
+                                    const dayEntries = projData.records;
+                                    const dayRefNo = `WR/${pCode}/${activeDate.replace(/-/g, "").substring(2,6) || "29"}`;
+                                    const siteEngineerName = dayEntries[0]?.siteEngineer || "N/A";
+
+                                    return (
+                                      <div key={pCode} className="bg-white rounded-3xl border border-slate-200 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] overflow-hidden p-6 relative space-y-6">
+                                        {/* Project Title and Header buttons */}
+                                        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                                          <div className="flex items-center gap-3">
+                                            <div className="bg-slate-900 text-white px-2.5 py-1 rounded-xl text-2xs font-bold font-mono">
+                                              {pCode}
+                                            </div>
+                                            <div>
+                                              <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                                                {projData.projectName}
+                                              </h4>
+                                              <p className="text-[10px] font-mono text-slate-400 uppercase">
+                                                Location: {projData.projectLocation}
+                                              </p>
+                                            </div>
+                                          </div>
+
+                                          <div className="flex items-center flex-wrap gap-1.5">
+                                            <button
+                                              onClick={() => setViewingProgressSheet({
+                                                isOpen: true,
+                                                projectCode: pCode,
+                                                projectName: projData.projectName,
+                                                projectLocation: projData.projectLocation,
+                                                date: activeDate,
+                                                records: dayEntries
+                                              })}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 cursor-pointer transition-colors"
+                                              title="View printable template"
+                                            >
+                                              <Eye className="h-3 w-3" /> View Sheet
+                                            </button>
+                                            <button
+                                              onClick={() => exportSingleProgressSheetCSV(pCode, projData.projectName, activeDate, dayEntries)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg border border-emerald-200 cursor-pointer transition-colors"
+                                              title="Export to CSV file"
+                                            >
+                                              <Download className="h-3 w-3" /> CSV
+                                            </button>
+                                            <button
+                                              onClick={() => exportSingleProgressSheetPDF(pCode, projData.projectName, activeDate, dayEntries)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 cursor-pointer transition-colors"
+                                              title="Export to PDF report"
+                                            >
+                                              <FileText className="h-3 w-3" /> PDF
+                                            </button>
+                                            <button
+                                              onClick={() => handleDeleteProjectDailySheet(pCode, activeDate)}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-rose-600 bg-rose-50/50 hover:bg-rose-100 rounded-lg border border-rose-200 cursor-pointer transition-colors"
+                                              title="Delete entire project daily sheet"
+                                            >
+                                              <Trash2 className="h-3 w-3" /> Delete
+                                            </button>
+                                          </div>
+                                        </div>
+
+                                        {/* Details strip */}
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                                          <div>
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase block font-mono">SITE ENGINEER IN-CHARGE</span>
+                                            <span className="text-xs font-bold text-slate-800 uppercase block mt-0.5">{siteEngineerName}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase block font-mono">REPORT REF NO</span>
+                                            <span className="text-xs font-mono font-bold text-slate-800 block mt-0.5">{dayRefNo}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase block font-mono">ACTIVITIES LOGGED</span>
+                                            <span className="text-xs font-bold text-slate-800 block mt-0.5">{dayEntries.length} Items</span>
+                                          </div>
+                                        </div>
+
+                                        {/* TABLE CONTAINER */}
+                                        <div className="border border-slate-300 rounded-xl overflow-hidden bg-white shadow-2xs relative">
+                                          <div className="overflow-x-auto relative z-10">
+                                            <table className="w-full text-left border-collapse min-w-[1000px]">
+                                              <thead>
+                                                <tr className="bg-[#DDEBF7] text-[#1F4E78] text-[10px] font-mono tracking-wider uppercase border-b border-slate-300">
+                                                  <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-16">S/NO.</th>
+                                                  <th className="py-2.5 px-4 font-bold border-r border-slate-300">NAME OF ACTIVITY</th>
+                                                  <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-40">% WORK COMPLETED</th>
+                                                  <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-32">TARGET DATE</th>
+                                                  <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-40">WORK COMPLETED TODAY</th>
+                                                  <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-40">NO. LABOR / SUBCONTRACTOR</th>
+                                                  <th className="py-2.5 px-4 font-bold border-r border-slate-300">EQUIPMENT</th>
+                                                  <th className="py-2.5 px-4 font-bold border-r border-slate-300">REMARKS</th>
+                                                  <th className="py-2.5 px-3 font-bold text-center w-24">ACTIONS</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody className="divide-y divide-slate-200 text-xs text-slate-700">
+                                                {dayEntries.map((row, idx) => {
+                                                  const cumVal = parseFloat(row.workCompletedPercent || "0");
+                                                  const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+
+                                                  return editingProgressId === row.id ? (
+                                                    <tr key={row.id} className="bg-blue-50/40 border-b border-blue-100 animate-fadeIn">
+                                                      <td className="py-2 px-2 text-center border-r border-slate-200 text-slate-400 font-bold font-mono">
+                                                        {idx + 1}
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <input
+                                                          type="text"
+                                                          value={editProgressForm.activityName}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, activityName: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs uppercase font-semibold text-slate-800 focus:ring-1 focus:ring-blue-500 focus:outline-none font-sans"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <input
+                                                          type="number"
+                                                          min="0"
+                                                          max="100"
+                                                          value={editProgressForm.workCompletedPercent}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, workCompletedPercent: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono text-center focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                                          placeholder="0-100"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200 text-center">
+                                                        <input
+                                                          type="date"
+                                                          value={editProgressForm.targetDate}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, targetDate: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-1 py-1 text-xs font-mono text-center focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <input
+                                                          type="number"
+                                                          min="0"
+                                                          max="100"
+                                                          value={editProgressForm.workCompletedTodayPercent}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, workCompletedTodayPercent: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono text-center focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                                          placeholder="0-100"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <input
+                                                          type="number"
+                                                          min="0"
+                                                          value={editProgressForm.noOfLaborSubcontractor}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, noOfLaborSubcontractor: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono text-center focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <input
+                                                          type="text"
+                                                          value={editProgressForm.equipment}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, equipment: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs uppercase focus:ring-1 focus:ring-blue-500 focus:outline-none font-sans"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <input
+                                                          type="text"
+                                                          value={editProgressForm.remarks}
+                                                          onChange={(e) => setEditProgressForm(prev => ({ ...prev, remarks: e.target.value }))}
+                                                          className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs uppercase focus:ring-1 focus:ring-blue-500 focus:outline-none font-sans"
+                                                        />
+                                                      </td>
+                                                      <td className="py-2 px-2 text-center">
+                                                        <div className="flex items-center justify-center gap-1.5">
+                                                          <button
+                                                            onClick={() => handleSaveProgressEdit(row.id)}
+                                                            className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-lg border border-transparent hover:border-emerald-100 transition-colors cursor-pointer inline-flex items-center justify-center"
+                                                            title="Save changes"
+                                                          >
+                                                            <Check className="h-3.5 w-3.5" />
+                                                          </button>
+                                                          <button
+                                                            onClick={() => setEditingProgressId(null)}
+                                                            className="p-1 text-slate-500 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-colors cursor-pointer inline-flex items-center justify-center"
+                                                            title="Cancel"
+                                                          >
+                                                            <X className="h-3.5 w-3.5" />
+                                                          </button>
+                                                        </div>
+                                                      </td>
+                                                    </tr>
+                                                  ) : (
+                                                    <tr key={row.id} className="hover:bg-slate-50/55 transition-colors">
+                                                      <td className="py-3 px-3 text-center border-r border-slate-200 text-slate-400 font-bold font-mono">
+                                                        {idx + 1}
+                                                      </td>
+                                                      <td className="py-3 px-4 font-bold border-r border-slate-200 text-slate-900 uppercase">
+                                                        {row.activityName || "-"}
+                                                      </td>
+                                                      <td className="py-3 px-3 border-r border-slate-200">
+                                                        <div className="flex items-center gap-2">
+                                                          <div className="w-20 bg-slate-100 rounded-full h-1.5 overflow-hidden border border-slate-200">
+                                                            <div 
+                                                              className={`h-full rounded-full ${cleanCum === 100 ? "bg-emerald-500" : cleanCum > 50 ? "bg-amber-500" : "bg-blue-500"}`}
+                                                              style={{ width: `${cleanCum}%` }}
+                                                            ></div>
+                                                          </div>
+                                                          <span className="font-bold font-mono text-[10px] text-slate-800">{row.workCompletedPercent || "0"}%</span>
+                                                        </div>
+                                                      </td>
+                                                      <td className="py-3 px-3 text-center border-r border-slate-200 text-slate-600 font-semibold font-mono">
+                                                        {row.targetDate || "-"}
+                                                      </td>
+                                                      <td className="py-3 px-3 text-center border-r border-slate-200">
+                                                        {row.workCompletedTodayPercent ? (
+                                                          <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-100 px-2.5 py-0.5 rounded-full font-bold font-mono text-[10px]">
+                                                            +{row.workCompletedTodayPercent}%
+                                                          </span>
+                                                        ) : (
+                                                          <span className="text-slate-400 font-mono">-</span>
+                                                        )}
+                                                      </td>
+                                                      <td className="py-3 px-3 text-center border-r border-slate-200 font-mono font-bold text-slate-800">
+                                                        {row.noOfLaborSubcontractor || "-"}
+                                                      </td>
+                                                      <td className="py-3 px-4 border-r border-slate-200 text-slate-600 uppercase font-medium">
+                                                        {row.equipment || "-"}
+                                                      </td>
+                                                      <td className="py-3 px-4 border-r border-slate-200 text-slate-600 uppercase font-medium">
+                                                        {row.remarks || "-"}
+                                                      </td>
+                                                      <td className="py-3 px-3 text-center">
+                                                        <div className="flex items-center justify-center gap-1.5">
+                                                          <button
+                                                            onClick={() => {
+                                                              setEditingProgressId(row.id);
+                                                              setEditProgressForm({
+                                                                activityName: row.activityName || "",
+                                                                workCompletedPercent: row.workCompletedPercent || "",
+                                                                targetDate: row.targetDate || "",
+                                                                workCompletedTodayPercent: row.workCompletedTodayPercent || "",
+                                                                noOfLaborSubcontractor: row.noOfLaborSubcontractor || "",
+                                                                equipment: row.equipment || "",
+                                                                remarks: row.remarks || ""
+                                                              });
+                                                            }}
+                                                            className="p-1 text-slate-600 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-colors cursor-pointer inline-flex items-center justify-center"
+                                                            title="Edit log entry"
+                                                          >
+                                                            <Edit className="h-3.5 w-3.5" />
+                                                          </button>
+                                                          <button
+                                                            onClick={() => handleDeleteItem(row.id, row.activityName || "Log Entry")}
+                                                            className="p-1 text-rose-600 hover:bg-rose-50 rounded-lg border border-transparent hover:border-rose-100 transition-colors cursor-pointer inline-flex items-center justify-center"
+                                                            title="Delete log entry"
+                                                          >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                          </button>
+                                                        </div>
+                                                      </td>
+                                                    </tr>
+                                                  );
+                                                })}
+
+                                                {/* Summary row */}
+                                                <tr className="bg-[#E2EFDA] text-slate-800 select-none">
+                                                  <td className="py-2 px-3 border-r border-slate-300"></td>
+                                                  <td className="py-2 px-4 font-bold border-r border-slate-300 text-[10px] uppercase text-[#375623]">TOTAL ACTIVITIES IN SHEET</td>
+                                                  <td className="py-2 px-3 border-r border-slate-300 font-bold font-mono text-[11px] text-[#375623]">{dayEntries.length}</td>
+                                                  <td className="py-2 px-3 border-r border-slate-300"></td>
+                                                  <td className="py-2 px-3 border-r border-slate-300"></td>
+                                                  <td className="py-2 px-3 border-r border-slate-300 font-bold font-mono text-[11px] text-[#375623]">
+                                                    {dayEntries.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0) || "-"}
+                                                  </td>
+                                                  <td className="py-2 px-4 border-r border-slate-300"></td>
+                                                  <td className="py-2 px-4 border-r border-slate-300"></td>
+                                                  <td className="py-2 px-3"></td>
+                                                </tr>
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="bg-white rounded-3xl p-12 text-center text-slate-400 border border-slate-200/60 font-medium text-sm">
+                                <Calendar className="h-10 w-10 text-slate-300 mx-auto mb-3" />
+                                Select a date from the browser to view records.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* LABOR CODES & PROJECT CODES CONFIGURATION DASHBOARD */}
             {adminTab === "labor_codes" && (
               <div id="labor-codes-dashboard" className="space-y-6 animate-fadeIn">
@@ -3055,81 +4474,130 @@ export default function App() {
                 {laborCodesSubTab === "project_codes" && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
                     
-                    {/* Left Column: Input Form */}
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm space-y-4 h-fit">
-                      <h3 className="font-semibold text-slate-800 uppercase tracking-wider text-xs font-mono border-b border-slate-100 pb-2 flex items-center gap-1.5">
-                        <PlusCircle className="h-4 w-4 text-slate-500" /> Add Project Mapping
-                      </h3>
-                      
-                      {saveProjectCodeError && (
-                        <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-2xs text-rose-700 flex items-start gap-1.5">
-                          <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
-                          <span>{saveProjectCodeError}</span>
-                        </div>
-                      )}
+                    {/* Left Column: Input Form & Delete Select Panel */}
+                    <div className="space-y-6 h-fit">
+                      {/* Add Project card */}
+                      <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm space-y-4">
+                        <h3 className="font-semibold text-slate-800 uppercase tracking-wider text-xs font-mono border-b border-slate-100 pb-2 flex items-center gap-1.5">
+                          <PlusCircle className="h-4 w-4 text-slate-500" /> Add Project Mapping
+                        </h3>
+                        
+                        {saveProjectCodeError && (
+                          <div className="bg-rose-50 border-l-4 border-rose-500 p-3 rounded text-2xs text-rose-700 flex items-start gap-1.5">
+                            <AlertCircle className="h-4 w-4 flex-shrink-0 text-rose-500" />
+                            <span>{saveProjectCodeError}</span>
+                          </div>
+                        )}
 
-                      <form onSubmit={handleSaveProjectCode} className="space-y-4">
+                        <form onSubmit={handleSaveProjectCode} className="space-y-4">
+                          <div className="flex flex-col">
+                            <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                              Project Code
+                            </label>
+                            <input
+                              id="new-project-code"
+                              type="text"
+                              required
+                              placeholder="e.g. P004"
+                              value={newProjectCode}
+                              onChange={(e) => setNewProjectCode(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                            />
+                          </div>
+
+                          <div className="flex flex-col">
+                            <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                              Project Name
+                            </label>
+                            <input
+                              id="new-project-name"
+                              type="text"
+                              required
+                              placeholder="e.g. COMMERCIAL TOWER PROJECT"
+                              value={newProjectName}
+                              onChange={(e) => setNewProjectName(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                            />
+                          </div>
+
+                          <div className="flex flex-col">
+                            <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
+                              Site Location
+                            </label>
+                            <input
+                              id="new-project-location"
+                              type="text"
+                              required
+                              placeholder="e.g. AL BARSHA 1ST"
+                              value={newProjectLocation}
+                              onChange={(e) => setNewProjectLocation(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
+                            />
+                          </div>
+
+                          <button
+                            id="save-project-mapping-btn"
+                            type="submit"
+                            disabled={isSavingProjectCode}
+                            className="w-full inline-flex items-center justify-center py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase rounded-xl shadow-sm text-[10px] tracking-wider cursor-pointer disabled:opacity-50 transition-colors"
+                          >
+                            {isSavingProjectCode ? (
+                              <>
+                                <RefreshCw className="h-3 w-3 mr-1.5 animate-spin text-white" />
+                                SAVING...
+                              </>
+                            ) : (
+                              "SAVE PROJECT MAPPING"
+                            )}
+                          </button>
+                        </form>
+                      </div>
+
+                      {/* Select Project to Delete card */}
+                      <div className="bg-white p-6 rounded-3xl border border-slate-200/60 shadow-sm space-y-4">
+                        <h3 className="font-semibold text-rose-600 uppercase tracking-wider text-xs font-mono border-b border-slate-100 pb-2 flex items-center gap-1.5">
+                          <Trash2 className="h-4 w-4 text-rose-500" /> Delete Project Mapping
+                        </h3>
+                        
                         <div className="flex flex-col">
                           <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
-                            Project Code
+                            Select Project to Delete
                           </label>
-                          <input
-                            id="new-project-code"
-                            type="text"
-                            required
-                            placeholder="e.g. P004"
-                            value={newProjectCode}
-                            onChange={(e) => setNewProjectCode(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
-                          />
-                        </div>
-
-                        <div className="flex flex-col">
-                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
-                            Project Name
-                          </label>
-                          <input
-                            id="new-project-name"
-                            type="text"
-                            required
-                            placeholder="e.g. COMMERCIAL TOWER PROJECT"
-                            value={newProjectName}
-                            onChange={(e) => setNewProjectName(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
-                          />
-                        </div>
-
-                        <div className="flex flex-col">
-                          <label className="text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-1">
-                            Site Location
-                          </label>
-                          <input
-                            id="new-project-location"
-                            type="text"
-                            required
-                            placeholder="e.g. AL BARSHA 1ST"
-                            value={newProjectLocation}
-                            onChange={(e) => setNewProjectLocation(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all"
-                          />
+                          <select
+                            id="delete-project-select"
+                            value={projectToDelete}
+                            onChange={(e) => setProjectToDelete(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-950/10 focus:border-slate-700 text-xs font-semibold text-slate-800 uppercase transition-all cursor-pointer"
+                          >
+                            <option value="">-- Choose Project --</option>
+                            {projectCodes.length === 0 ? (
+                              <option value="" disabled>No custom database projects available</option>
+                            ) : (
+                              projectCodes.map((pc) => (
+                                <option key={pc.id} value={pc.id}>
+                                  {pc.code} - {pc.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
                         </div>
 
                         <button
-                          id="save-project-mapping-btn"
-                          type="submit"
-                          disabled={isSavingProjectCode}
-                          className="w-full inline-flex items-center justify-center py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase rounded-xl shadow-sm text-[10px] tracking-wider cursor-pointer disabled:opacity-50 transition-colors"
+                          id="delete-selected-project-btn"
+                          type="button"
+                          disabled={!projectToDelete}
+                          onClick={() => {
+                            const pc = projectCodes.find(c => c.id === projectToDelete);
+                            if (pc) {
+                              handleDeleteProjectCode(pc.id, pc.code);
+                              setProjectToDelete("");
+                            }
+                          }}
+                          className="w-full inline-flex items-center justify-center py-2.5 px-4 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold uppercase rounded-xl shadow-sm text-[10px] tracking-wider cursor-pointer transition-colors"
                         >
-                          {isSavingProjectCode ? (
-                            <>
-                              <RefreshCw className="h-3 w-3 mr-1.5 animate-spin text-white" />
-                              SAVING...
-                            </>
-                          ) : (
-                            "SAVE PROJECT MAPPING"
-                          )}
+                          <Trash2 className="h-3.5 w-3.5 mr-1.5" /> DELETE SELECTED PROJECT
                         </button>
-                      </form>
+                      </div>
                     </div>
 
                     {/* Right Column: Project Mapping Ledger Table */}
@@ -3710,6 +5178,179 @@ export default function App() {
                 className="px-5 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-sm"
               >
                 Close Viewer
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* SEPARATE PROGRESS MONITORING SHEET VIEWER MODAL */}
+      {viewingProgressSheet && viewingProgressSheet.isOpen && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center p-4 sm:p-6 md:p-10 bg-slate-900/75 backdrop-blur-md animate-fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-6xl w-full h-[90vh] md:h-[85vh] flex flex-col overflow-hidden transform scale-100 transition-all animate-slide-in">
+            
+            {/* Modal Header */}
+            <div className="bg-[#0F172A] p-5 md:p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <Calendar className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2">
+                    Daily Progress Log Sheet
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-emerald-950 text-emerald-400 border-emerald-800">
+                      {viewingProgressSheet.date}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5 truncate max-w-md">
+                    Project: {viewingProgressSheet.projectName} ({viewingProgressSheet.projectCode})
+                  </p>
+                </div>
+              </div>
+
+              {/* Action buttons inside Modal Header */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => exportSingleProgressSheetPDF(
+                    viewingProgressSheet.projectCode,
+                    viewingProgressSheet.projectName,
+                    viewingProgressSheet.date,
+                    viewingProgressSheet.records
+                  )}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                >
+                  <FileText className="h-3.5 w-3.5" /> Export PDF
+                </button>
+                <button
+                  onClick={() => exportSingleProgressSheetCSV(
+                    viewingProgressSheet.projectCode,
+                    viewingProgressSheet.projectName,
+                    viewingProgressSheet.date,
+                    viewingProgressSheet.records
+                  )}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" /> Export CSV
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                >
+                  <Printer className="h-3.5 w-3.5" /> Print
+                </button>
+                <button
+                  onClick={() => setViewingProgressSheet(null)}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                  title="Close viewer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 p-5 md:p-6">
+              
+              {/* Sheet Metadata Banner */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col md:flex-row gap-4 items-stretch justify-between mb-4 shrink-0">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 flex-1 text-xs">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block font-mono mb-0.5">DATE</span>
+                    <span className="font-semibold text-slate-800">{viewingProgressSheet.date}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block font-mono mb-0.5">PROJECT CODE</span>
+                    <span className="font-mono font-bold text-slate-800">{viewingProgressSheet.projectCode}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block font-mono mb-0.5">PROJECT NAME</span>
+                    <span className="font-bold text-slate-900 uppercase">{viewingProgressSheet.projectName}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block font-mono mb-0.5">LOCATION</span>
+                    <span className="font-semibold text-slate-600 uppercase">{viewingProgressSheet.projectLocation || "N/A"}</span>
+                  </div>
+                </div>
+                
+                <div className="border-l border-slate-200 pl-4 flex items-center gap-4">
+                  <div>
+                    <span className="text-[9px] font-bold text-slate-400 uppercase block font-mono">SITE ENGINEER IN-CHARGE</span>
+                    <span className="text-xs font-bold text-slate-800 uppercase">{viewingProgressSheet.records[0]?.siteEngineer || "N/A"}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Records Table */}
+              <div className="flex-1 bg-white border border-slate-200 rounded-2xl shadow-inner overflow-hidden flex flex-col">
+                <div className="overflow-auto flex-1">
+                  <table className="w-full text-left border-collapse min-w-[800px]">
+                    <thead className="bg-[#1F4E78] text-white sticky top-0 z-10 text-[10px] uppercase font-mono tracking-wider border-b border-slate-300">
+                      <tr>
+                        <th className="py-3 px-3 font-bold text-center w-16 border-r border-[#153a5b]">S/NO.</th>
+                        <th className="py-3 px-4 font-bold border-r border-[#153a5b]">NAME OF ACTIVITY</th>
+                        <th className="py-3 px-3 font-bold text-center w-40 border-r border-[#153a5b]">% WORK COMPLETED</th>
+                        <th className="py-3 px-3 font-bold text-center w-32 border-r border-[#153a5b]">TARGET DATE</th>
+                        <th className="py-3 px-3 font-bold text-center w-40 border-r border-[#153a5b]">WORK COMPLETED TODAY</th>
+                        <th className="py-3 px-3 font-bold text-center w-40 border-r border-[#153a5b]">NO. LABOR</th>
+                        <th className="py-3 px-4 font-bold border-r border-[#153a5b]">EQUIPMENT</th>
+                        <th className="py-3 px-4 font-bold">REMARKS</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs font-medium">
+                      {viewingProgressSheet.records.map((r, idx) => {
+                        const cumVal = parseFloat(r.workCompletedPercent || "0");
+                        const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/55 transition-colors border-b border-slate-100">
+                            <td className="py-2.5 px-3 text-center border-r border-slate-100 text-slate-400 font-bold font-mono">{idx + 1}</td>
+                            <td className="py-2.5 px-4 text-slate-900 font-bold uppercase border-r border-slate-100">{r.activityName || "-"}</td>
+                            <td className="py-2.5 px-3 border-r border-slate-100">
+                              <div className="flex items-center gap-2 justify-center">
+                                <div className="w-20 bg-slate-100 rounded-full h-1.5 overflow-hidden border border-slate-200">
+                                  <div 
+                                    className={`h-full rounded-full ${cleanCum === 100 ? "bg-emerald-500" : cleanCum > 50 ? "bg-amber-500" : "bg-blue-500"}`}
+                                    style={{ width: `${cleanCum}%` }}
+                                  ></div>
+                                </div>
+                                <span className="font-bold font-mono text-[10px] text-slate-800">{r.workCompletedPercent || "0"}%</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-center border-r border-slate-100 text-slate-600 font-semibold font-mono">{r.targetDate || "-"}</td>
+                            <td className="py-2.5 px-3 text-center border-r border-slate-100">
+                              {r.workCompletedTodayPercent ? (
+                                <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-100 px-2.5 py-0.5 rounded-full font-bold font-mono text-[10px]">
+                                  +{r.workCompletedTodayPercent}%
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-mono">-</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center border-r border-slate-100 font-mono font-bold text-slate-800">
+                              {r.noOfLaborSubcontractor || "-"}
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-600 uppercase border-r border-slate-100">{r.equipment || "-"}</td>
+                            <td className="py-2.5 px-4 text-slate-600 uppercase">{r.remarks || "-"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            
+            {/* Modal Footer */}
+            <div className="bg-slate-100 px-6 py-4 flex items-center justify-between border-t border-slate-200/60 shrink-0">
+              <span className="text-[10px] text-slate-400 font-mono">
+                System: SECURE ACTIVITY LOGS PRESENTATION CONTROLLER .
+              </span>
+              <button
+                type="button"
+                onClick={() => setViewingProgressSheet(null)}
+                className="px-5 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-sm"
+              >
+                Close Sheet
               </button>
             </div>
 

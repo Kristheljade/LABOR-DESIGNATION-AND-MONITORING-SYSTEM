@@ -41,6 +41,30 @@
           "type": "string",
           "description": "The labor attendance status (Present, Absent, Under Time)."
         },
+        "activityName": {
+          "type": "string",
+          "description": "The name of the construction activity."
+        },
+        "workCompletedPercent": {
+          "type": "string",
+          "description": "Cumulative % of work completed."
+        },
+        "targetDate": {
+          "type": "string",
+          "description": "The target date for the activity."
+        },
+        "workCompletedTodayPercent": {
+          "type": "string",
+          "description": "% of work completed today."
+        },
+        "noOfLaborSubcontractor": {
+          "type": "string",
+          "description": "Number of labors or sub-contractors on this activity."
+        },
+        "equipment": {
+          "type": "string",
+          "description": "Equipment used for the activity."
+        },
         "createdAt": {
           "type": "string",
           "description": "The ISO timestamp when this entry was submitted."
