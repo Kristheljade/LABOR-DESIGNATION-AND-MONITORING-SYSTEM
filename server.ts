@@ -368,9 +368,28 @@ async function getLaborCodes(): Promise<any[]> {
         list.push({ id: doc.id, ...doc.data() });
       });
 
-      // Cache locally
-      await fs.writeFile(CODES_FILE, JSON.stringify(list, null, 2), "utf-8");
-      return list;
+      if (list.length > 0) {
+        // Cache locally
+        await fs.writeFile(CODES_FILE, JSON.stringify(list, null, 2), "utf-8");
+        return list;
+      } else {
+        // Seed default initial labor codes into Firestore
+        const defaults = [
+          { id: "BL001", code: "BL001", name: "MUHAMMAD RAMZAN", designation: "CARPENTER", createdAt: new Date().toISOString() },
+          { id: "BL002", code: "BL002", name: "KARTAR SINGH", designation: "HELPER", createdAt: new Date().toISOString() },
+          { id: "BL003", code: "BL003", name: "ALEXIS SÁNCHEZ", designation: "STEEL FIXER", createdAt: new Date().toISOString() },
+          { id: "BL004", code: "BL004", name: "AHMED MANSUR", designation: "MASON", createdAt: new Date().toISOString() }
+        ];
+        for (const item of defaults) {
+          try {
+            await setDoc(doc(firestoreDb, "labor_codes", item.id), item);
+          } catch (err) {
+            console.error(`Failed to write default labor code ${item.id} to Firestore:`, err);
+          }
+        }
+        await fs.writeFile(CODES_FILE, JSON.stringify(defaults, null, 2), "utf-8");
+        return defaults;
+      }
     }
   } catch (error) {
     console.warn("Firebase fetch for labor codes failed, falling back to local file cache:", error);
@@ -509,9 +528,27 @@ async function getProjectCodes(): Promise<any[]> {
         list.push({ id: doc.id, ...doc.data() });
       });
 
-      // Cache locally
-      await fs.writeFile(PROJECT_CODES_FILE, JSON.stringify(list, null, 2), "utf-8");
-      return list;
+      if (list.length > 0) {
+        // Cache locally
+        await fs.writeFile(PROJECT_CODES_FILE, JSON.stringify(list, null, 2), "utf-8");
+        return list;
+      } else {
+        // Seed default initial project codes into Firestore
+        const defaults = [
+          { id: "P001", code: "P001", name: "HASSAN VILLA PROJECT", location: "AL WARQA'A 1ST", createdAt: new Date().toISOString() },
+          { id: "P002", code: "P002", name: "MOSQUE PROJECT", location: "AL YALAYIS 5TH", createdAt: new Date().toISOString() },
+          { id: "P003", code: "P003", name: "PROPOSED RESIDENTIAL BUILDING", location: "AL BARSHA 2ND", createdAt: new Date().toISOString() }
+        ];
+        for (const item of defaults) {
+          try {
+            await setDoc(doc(firestoreDb, "project_codes", item.id), item);
+          } catch (err) {
+            console.error(`Failed to write default project code ${item.id} to Firestore:`, err);
+          }
+        }
+        await fs.writeFile(PROJECT_CODES_FILE, JSON.stringify(defaults, null, 2), "utf-8");
+        return defaults;
+      }
     }
   } catch (error) {
     console.warn("Firebase fetch for project codes failed, falling back to local file cache:", error);
