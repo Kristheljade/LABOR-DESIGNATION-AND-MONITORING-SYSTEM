@@ -87,6 +87,75 @@ async function getDb() {
   return dbPromise;
 }
 
+let writeQueue: Promise<any> = Promise.resolve();
+
+// Helper to safely write a file atomically using a unique temp file and serialization queue
+async function safeWriteFile(filePath: string, data: string) {
+  return new Promise<void>((resolve, reject) => {
+    writeQueue = writeQueue
+      .catch(() => {}) // Ensure previous errors don't stall the write queue
+      .then(async () => {
+        let tempPath = "";
+        try {
+          const dir = path.dirname(filePath);
+          await fs.mkdir(dir, { recursive: true });
+          
+          const rand = Math.random().toString(36).substring(2, 10);
+          tempPath = `${filePath}.${rand}.tmp`;
+          
+          await fs.writeFile(tempPath, data, "utf-8");
+          await fs.rename(tempPath, filePath);
+          resolve();
+        } catch (err) {
+          console.error(`safeWriteFile error for ${filePath}:`, err);
+          if (tempPath) {
+            try {
+              if (existsSync(tempPath)) {
+                await fs.unlink(tempPath);
+              }
+            } catch (_) {}
+          }
+          reject(err);
+        }
+      });
+  });
+}
+
+// Helper to safely write submissions to the main DATA_FILE atomically
+async function safeWriteSubmissions(submissions: any[]) {
+  await safeWriteFile(DATA_FILE, JSON.stringify(submissions, null, 2));
+}
+
+// Helper to safely read and parse local submissions
+async function readLocalSubmissions(): Promise<any[]> {
+  try {
+    if (!existsSync(DATA_FILE)) {
+      return [];
+    }
+    const data = await fs.readFile(DATA_FILE, "utf-8");
+    return JSON.parse(data || "[]");
+  } catch (error) {
+    console.error("Error reading or parsing local submissions backup:", error);
+    // Attempt self-healing from Firestore if available
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        const colRef = collection(firestoreDb, "submissions");
+        const querySnapshot = await getDocs(colRef);
+        const list: any[] = [];
+        querySnapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() });
+        });
+        await safeWriteSubmissions(list);
+        return list;
+      }
+    } catch (fireErr) {
+      console.error("Self-healing Firestore recovery failed:", fireErr);
+    }
+    return [];
+  }
+}
+
 // Helper to read submissions
 async function getSubmissions(): Promise<any[]> {
   try {
@@ -99,24 +168,15 @@ async function getSubmissions(): Promise<any[]> {
         list.push({ id: doc.id, ...doc.data() });
       });
 
-      // Cache locally to keep offline fallback sync
-      await fs.writeFile(DATA_FILE, JSON.stringify(list, null, 2), "utf-8");
+      // Cache locally to keep offline fallback sync atomically
+      await safeWriteSubmissions(list);
       return list;
     }
   } catch (error) {
     console.warn("Firebase fetch failed, falling back to local file cache:", error);
   }
 
-  try {
-    if (!existsSync(DATA_FILE)) {
-      return [];
-    }
-    const data = await fs.readFile(DATA_FILE, "utf-8");
-    return JSON.parse(data || "[]");
-  } catch (error) {
-    console.error("Error reading submissions from fallback:", error);
-    return [];
-  }
+  return readLocalSubmissions();
 }
 
 async function syncSeparateFiles() {
@@ -166,14 +226,14 @@ async function syncSeparateFiles() {
       if (day === "unknown") continue;
       list.sort((a, b) => (a.laborsName || "").localeCompare(b.laborsName || ""));
       const filePath = path.join(DAILY_DIR, `entries_daily_${day}.json`);
-      await fs.writeFile(filePath, JSON.stringify(list, null, 2), "utf-8");
+      await safeWriteFile(filePath, JSON.stringify(list, null, 2));
     }
 
     for (const [month, list] of Object.entries(monthlyGroups)) {
       if (month === "unknown") continue;
       list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || (a.laborsName || "").localeCompare(b.laborsName || ""));
       const filePath = path.join(MONTHLY_DIR, `entries_monthly_${month}.json`);
-      await fs.writeFile(filePath, JSON.stringify(list, null, 2), "utf-8");
+      await safeWriteFile(filePath, JSON.stringify(list, null, 2));
     }
 
     console.log("Successfully synchronized separate daily and monthly ledger records on server.");
@@ -665,13 +725,9 @@ app.post("/api/submissions", async (req, res) => {
 
     // Always sync locally to keep the local entries.json database up to date
     try {
-      let submissions = [];
-      if (existsSync(DATA_FILE)) {
-        const data = await fs.readFile(DATA_FILE, "utf-8");
-        submissions = JSON.parse(data || "[]");
-      }
+      let submissions = await readLocalSubmissions();
       submissions.push({ id, ...newSubmission });
-      await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
+      await safeWriteSubmissions(submissions);
     } catch (localError) {
       console.error("Failed to write to local storage backup:", localError);
     }
@@ -707,17 +763,94 @@ app.put("/api/submissions/:id", async (req, res) => {
       remarks
     } = req.body;
 
-    let submissions = [];
-    if (existsSync(DATA_FILE)) {
-      const data = await fs.readFile(DATA_FILE, "utf-8");
-      submissions = JSON.parse(data || "[]");
-    }
+    let submissions = await readLocalSubmissions();
 
     const index = submissions.findIndex((s: any) => s.id === id);
     if (index === -1) {
       return res.status(404).json({ error: "Record not found." });
     }
 
+    const originalRecord = submissions[index];
+    const isActivityLog = !!(originalRecord.activityName || activityName);
+
+    // Get today's local date in YYYY-MM-DD format
+    const getTodayString = () => {
+      try {
+        return new Date().toLocaleDateString("en-CA");
+      } catch (e) {
+        const d = new Date();
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
+    };
+
+    const todayStr = getTodayString();
+    const originalDate = originalRecord.date;
+    const targetDateVal = date !== undefined ? date : originalDate;
+
+    // Check if we should create a new record instead of overwriting
+    let shouldCreateNew = false;
+    if (isActivityLog) {
+      if (originalDate !== todayStr || originalDate !== targetDateVal) {
+        shouldCreateNew = true;
+      }
+    }
+
+    if (shouldCreateNew) {
+      // Create a brand new record instead of overwriting the original one
+      const newId = Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6);
+      
+      // If the date in req.body matches original record (which means user didn't change it),
+      // but they are editing it on a later/different day, set the new record's date to today's date.
+      // If they explicitly changed the date in the edit form, use their specified date.
+      const finalDate = (date && date !== originalDate) ? date : todayStr;
+
+      const newSubmission = {
+        date: finalDate,
+        project: project !== undefined ? project : originalRecord.project,
+        laborsName: laborsName !== undefined ? laborsName : originalRecord.laborsName,
+        designation: designation !== undefined ? designation : originalRecord.designation,
+        projectLocation: projectLocation !== undefined ? projectLocation : originalRecord.projectLocation,
+        siteEngineer: siteEngineer !== undefined ? siteEngineer : originalRecord.siteEngineer,
+        reassignedTask: reassignedTask !== undefined ? reassignedTask : originalRecord.reassignedTask,
+        attendanceStatus: attendanceStatus !== undefined ? attendanceStatus : originalRecord.attendanceStatus,
+        activityName: activityName !== undefined ? activityName : originalRecord.activityName,
+        workCompletedPercent: workCompletedPercent !== undefined ? workCompletedPercent : originalRecord.workCompletedPercent,
+        targetDate: targetDate !== undefined ? targetDate : originalRecord.targetDate,
+        workCompletedTodayPercent: workCompletedTodayPercent !== undefined ? workCompletedTodayPercent : originalRecord.workCompletedTodayPercent,
+        noOfLaborSubcontractor: noOfLaborSubcontractor !== undefined ? noOfLaborSubcontractor : originalRecord.noOfLaborSubcontractor,
+        equipment: equipment !== undefined ? equipment : originalRecord.equipment,
+        remarks: remarks !== undefined ? remarks : originalRecord.remarks,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      // Write to Firebase Firestore
+      let firebaseSuccess = false;
+      try {
+        const firestoreDb = await getDb();
+        if (firestoreDb) {
+          await setDoc(doc(firestoreDb, "submissions", newId), newSubmission);
+          firebaseSuccess = true;
+          console.log(`Successfully created new entry ${newId} (copied/updated from ${id}) in Firestore.`);
+        }
+      } catch (error) {
+        console.warn("Failed writing new entry to Firestore:", error);
+      }
+
+      // Add to local submissions list
+      submissions.push({ id: newId, ...newSubmission });
+      await safeWriteSubmissions(submissions);
+
+      // Refresh the daily/monthly separate files
+      await syncSeparateFiles();
+
+      return res.json({ success: true, entry: { id: newId, ...newSubmission }, storedInFirebase: firebaseSuccess, createdNew: true });
+    }
+
+    // Otherwise, do standard overwrite/update on the same day
     const updatedSubmission = {
       ...submissions[index],
       date: date !== undefined ? date : submissions[index].date,
@@ -753,13 +886,13 @@ app.put("/api/submissions/:id", async (req, res) => {
       console.warn("Failed writing updated entry to Firestore:", error);
     }
 
-    // Write to local cache
-    await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
+    // Write to local cache atomically
+    await safeWriteSubmissions(submissions);
 
     // Refresh the daily/monthly separate files
     await syncSeparateFiles();
 
-    res.json({ success: true, entry: updatedSubmission, storedInFirebase: firebaseSuccess });
+    res.json({ success: true, entry: updatedSubmission, storedInFirebase: firebaseSuccess, createdNew: false });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -798,13 +931,10 @@ app.delete("/api/submissions/:id", requireAdmin, async (req, res) => {
     // Always sync locally to remove from the local backup entries.json database
     let initialLength = 0;
     try {
-      if (existsSync(DATA_FILE)) {
-        const data = await fs.readFile(DATA_FILE, "utf-8");
-        let submissions = JSON.parse(data || "[]");
-        initialLength = submissions.length;
-        submissions = submissions.filter((s: any) => s.id !== id);
-        await fs.writeFile(DATA_FILE, JSON.stringify(submissions, null, 2), "utf-8");
-      }
+      let submissions = await readLocalSubmissions();
+      initialLength = submissions.length;
+      submissions = submissions.filter((s: any) => s.id !== id);
+      await safeWriteSubmissions(submissions);
     } catch (localError) {
       console.error("Failed to update local storage backup during deletion:", localError);
     }
@@ -1016,10 +1146,8 @@ async function seedJuneProgressMonitoring() {
     // Check if we already have progress monitoring records in June 2026
     let submissions: any[] = [];
     try {
-      if (existsSync(DATA_FILE)) {
-        const data = await fs.readFile(DATA_FILE, "utf-8");
-        submissions = JSON.parse(data || "[]");
-      } else {
+      submissions = await readLocalSubmissions();
+      if (submissions.length === 0) {
         const colRef = collection(firestoreDb, "submissions");
         const querySnapshot = await getDocs(colRef);
         querySnapshot.forEach((doc) => {
@@ -1119,7 +1247,7 @@ async function seedJuneProgressMonitoring() {
     const filteredOriginals = seededSubmissions.filter((s: any) => !s.id.startsWith("seed-june-"));
     const finalSubmissions = [...filteredOriginals, ...newRecords];
     
-    await fs.writeFile(DATA_FILE, JSON.stringify(finalSubmissions, null, 2), "utf-8");
+    await safeWriteSubmissions(finalSubmissions);
     console.log(`Successfully seeded ${newRecords.length} progress monitoring records for June 2026 in Firestore and cache.`);
   } catch (error) {
     console.error("Error in seedJuneProgressMonitoring:", error);

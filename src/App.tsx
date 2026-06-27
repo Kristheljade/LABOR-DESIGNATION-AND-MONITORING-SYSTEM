@@ -600,6 +600,25 @@ export default function App() {
     records: Submission[];
   } | null>(null);
   
+  // Engineer Portal States
+  const [isEngineerPortalOpen, setIsEngineerPortalOpen] = useState(false);
+  const [portalSelectedEngineer, setPortalSelectedEngineer] = useState<string | null>(null);
+  const [engineerSearchQuery, setEngineerSearchQuery] = useState("");
+  const [editingEngineerRecordId, setEditingEngineerRecordId] = useState<string | null>(null);
+  const [engineerPortalActiveProject, setEngineerPortalActiveProject] = useState<string>("ALL");
+  const [editEngineerForm, setEditEngineerForm] = useState({
+    activityName: "",
+    workCompletedPercent: "",
+    targetDate: "",
+    workCompletedTodayPercent: "",
+    noOfLaborSubcontractor: "",
+    equipment: "",
+    remarks: "",
+    project: "",
+    date: "",
+    projectLocation: ""
+  });
+  
   // Table search and filters
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("ALL");
@@ -2065,13 +2084,27 @@ export default function App() {
 
       if (res.ok) {
         const data = await res.json();
-        setSubmissions(prev => prev.map(s => s.id === id ? data.entry : s));
+        
+        if (data.createdNew) {
+          setSubmissions(prev => [data.entry, ...prev]);
+          showNotification("New Entry Saved", "A new progress record was created for the updated date. Original historical record remains unchanged.", "success");
+        } else {
+          setSubmissions(prev => prev.map(s => s.id === id ? data.entry : s));
+          showNotification("Record Updated", "The activity progress entry was updated successfully.", "success");
+        }
+        
         setEditingProgressId(null);
-        showNotification("Record Updated", "The activity progress entry was updated successfully.", "success");
+        
         // Also update open viewing sheet records if viewing
         if (viewingProgressSheet && viewingProgressSheet.isOpen) {
           setViewingProgressSheet(prev => {
             if (!prev) return null;
+            if (data.createdNew) {
+              return {
+                ...prev,
+                records: [data.entry, ...prev.records]
+              };
+            }
             return {
               ...prev,
               records: prev.records.map(r => r.id === id ? data.entry : r)
@@ -2084,6 +2117,56 @@ export default function App() {
       }
     } catch (error) {
       console.error("Failed to update progress monitoring record:", error);
+      showNotification("Update Failed", "A network error occurred while updating the record.", "error");
+    }
+  };
+
+  // Handle saving an edited record in the engineer portal
+  const handleSaveEngineerRecord = async (id: string) => {
+    try {
+      const res = await fetch(`/api/submissions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editEngineerForm),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        
+        if (data.createdNew) {
+          setSubmissions(prev => [data.entry, ...prev]);
+          showNotification("New Entry Saved", "Your daily activity progress has been logged as a new entry. The original historical record remains unchanged.", "success");
+        } else {
+          setSubmissions(prev => prev.map(s => s.id === id ? data.entry : s));
+          showNotification("Record Updated", "Your daily activity progress record has been successfully updated.", "success");
+        }
+        
+        setEditingEngineerRecordId(null);
+        
+        // Also update open viewing sheet records if viewing
+        if (viewingProgressSheet && viewingProgressSheet.isOpen) {
+          setViewingProgressSheet(prev => {
+            if (!prev) return null;
+            if (data.createdNew) {
+              return {
+                ...prev,
+                records: [data.entry, ...prev.records]
+              };
+            }
+            return {
+              ...prev,
+              records: prev.records.map(r => r.id === id ? data.entry : r)
+            };
+          });
+        }
+        // Also update ledger files if needed
+        fetchLedgerFiles();
+      } else {
+        const err = await res.json();
+        showNotification("Update Failed", err.error || "Could not update the record.", "error");
+      }
+    } catch (error) {
+      console.error("Failed to update engineer progress record:", error);
       showNotification("Update Failed", "A network error occurred while updating the record.", "error");
     }
   };
@@ -2833,6 +2916,36 @@ export default function App() {
                   </div>
 
                 </form>
+              )}
+
+              {/* ENGINEER Dedicated PORTAL BUTTON */}
+              {activeFormTab === "monitoring" && formData.siteEngineer && formData.siteEngineer.trim() && (
+                <div className="mt-8 pt-6 border-t border-slate-150 animate-fade-in">
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-bold text-slate-850 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500"></span>
+                        Engineer Dedicated Access Portal
+                      </h4>
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        Access, edit, and update previously saved activity progress records for <strong className="text-indigo-600 font-semibold uppercase">{formData.siteEngineer}</strong>.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPortalSelectedEngineer(formData.siteEngineer);
+                        setIsEngineerPortalOpen(true);
+                        setEditingEngineerRecordId(null); // Reset any current edits
+                        setEngineerPortalActiveProject("ALL"); // Reset project filter
+                      }}
+                      className="self-start sm:self-center inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-sm hover:shadow-indigo-100 cursor-pointer"
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      Access {formData.siteEngineer} Portal
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -3865,9 +3978,16 @@ export default function App() {
 
                                           return (
                                             <div key={dKey} className="space-y-1">
-                                              <button
-                                                type="button"
+                                              <div
+                                                role="button"
+                                                tabIndex={0}
                                                 onClick={() => setSelectedMonitoringDate(dKey)}
+                                                onKeyDown={(e) => {
+                                                  if (e.key === "Enter" || e.key === " ") {
+                                                    e.preventDefault();
+                                                    setSelectedMonitoringDate(dKey);
+                                                  }
+                                                }}
                                                 className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1.5 cursor-pointer ${
                                                   isSelected
                                                     ? "bg-slate-900 text-white border-transparent shadow-md font-bold"
@@ -3913,7 +4033,7 @@ export default function App() {
                                                     );
                                                   })}
                                                 </div>
-                                              </button>
+                                              </div>
                                             </div>
                                           );
                                         })}
@@ -5548,6 +5668,556 @@ export default function App() {
                 className="px-5 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-sm"
               >
                 Close Sheet
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+          {/* ENGINEER DEDICATED CONTROL PORTAL MODAL */}
+      {isEngineerPortalOpen && portalSelectedEngineer && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center p-4 sm:p-6 md:p-10 bg-slate-900/75 backdrop-blur-md animate-fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-7xl w-full h-[90vh] md:h-[85vh] flex flex-col overflow-hidden transform scale-100 transition-all animate-slide-in">
+            
+            {/* Modal Header */}
+            <div className="bg-[#1e1b4b] p-5 md:p-6 text-white flex items-center justify-between gap-4 shrink-0 border-b border-indigo-900">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                  <UserCheck className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2">
+                    Engineer Control Portal
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-indigo-950 text-indigo-400 border-indigo-800 uppercase">
+                      {portalSelectedEngineer}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-indigo-200 mt-0.5">
+                    Access, edit, and update your saved daily progress monitoring entries.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsEngineerPortalOpen(false);
+                  setEditingEngineerRecordId(null);
+                }}
+                className="p-2 text-slate-400 hover:text-white hover:bg-indigo-900 rounded-xl transition-colors cursor-pointer"
+                title="Close Portal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Search & Filter Bar */}
+            <div className="bg-slate-50 border-b border-slate-150 p-4 flex flex-col sm:flex-row gap-3 items-center justify-between shrink-0">
+              <div className="relative w-full sm:max-w-xs">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search entries..."
+                  value={engineerSearchQuery}
+                  onChange={(e) => setEngineerSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all"
+                />
+              </div>
+              <div className="text-[10px] font-mono font-bold text-indigo-600 uppercase tracking-widest">
+                SHOWING SUBMITTED ACTIVITY LOGS
+              </div>
+            </div>
+
+            {/* Main Content Area */}
+            {(() => {
+              // 1. Gather all logs for the engineer
+              const allEngineerLogs = submissions.filter(s => {
+                const matchesEngineer = (s.siteEngineer || "").toUpperCase() === portalSelectedEngineer.toUpperCase();
+                const isProgressLog = !!(s.activityName || s.workCompletedPercent || s.targetDate || s.workCompletedTodayPercent || s.noOfLaborSubcontractor || s.equipment);
+                
+                if (!matchesEngineer || !isProgressLog) return false;
+                
+                if (engineerSearchQuery.trim()) {
+                  const q = engineerSearchQuery.toLowerCase();
+                  return (
+                    (s.activityName || "").toLowerCase().includes(q) ||
+                    (s.project || "").toLowerCase().includes(q) ||
+                    (s.date || "").toLowerCase().includes(q) ||
+                    (s.remarks || "").toLowerCase().includes(q) ||
+                    (s.equipment || "").toLowerCase().includes(q)
+                  );
+                }
+                return true;
+              });
+
+              // Sort logs by date descending, then createdAt descending
+              allEngineerLogs.sort((a, b) => {
+                const dateComp = (b.date || "").localeCompare(a.date || "");
+                if (dateComp !== 0) return dateComp;
+                return (b.createdAt || "").localeCompare(a.createdAt || "");
+              });
+
+              // 2. Group logs by project
+              const logsByProject: { [projectCode: string]: Submission[] } = {};
+              allEngineerLogs.forEach(log => {
+                const pCode = (log.project || "UNASSIGNED").toUpperCase().trim();
+                if (!logsByProject[pCode]) {
+                  logsByProject[pCode] = [];
+                }
+                logsByProject[pCode].push(log);
+              });
+
+              const uniqueProjectCodes = Object.keys(logsByProject).sort();
+
+              // Get actual projects available to match details (or fallback)
+              const combinedProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+
+              // Filter logs according to selected project in portal
+              const filteredLogs = allEngineerLogs.filter(log => {
+                if (engineerPortalActiveProject === "ALL") return true;
+                return (log.project || "").toUpperCase().trim() === engineerPortalActiveProject;
+              });
+
+              const activeProjInfo = engineerPortalActiveProject !== "ALL" 
+                ? combinedProjectCodes.find(pc => pc.code.toUpperCase() === engineerPortalActiveProject)
+                : null;
+              const activeProjName = activeProjInfo ? activeProjInfo.name : `${engineerPortalActiveProject} PROJECT`;
+              const activeProjLoc = activeProjInfo ? activeProjInfo.location : "";
+
+              return (
+                <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-slate-50/50">
+                  {/* Left Sidebar - Projects list */}
+                  <div className="w-full md:w-72 border-b md:border-b-0 md:border-r border-slate-200 bg-white flex flex-col shrink-0 overflow-y-auto">
+                    <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+                      <span className="text-[11px] font-mono font-bold text-indigo-950 uppercase tracking-widest flex items-center gap-1.5">
+                        <Briefcase className="h-4 w-4 text-indigo-600" /> Site Projects
+                      </span>
+                      <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-md">
+                        {uniqueProjectCodes.length} {uniqueProjectCodes.length === 1 ? 'Project' : 'Projects'}
+                      </span>
+                    </div>
+
+                    <div className="p-3 space-y-1">
+                      {/* "All Projects" Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEngineerPortalActiveProject("ALL");
+                          setEditingEngineerRecordId(null);
+                        }}
+                        className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer ${
+                          engineerPortalActiveProject === "ALL"
+                            ? "bg-indigo-950 text-white border-transparent shadow-sm"
+                            : "bg-transparent text-slate-700 hover:bg-slate-50 hover:text-slate-900 border-transparent"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-xs font-bold uppercase tracking-wide">All Projects</span>
+                          <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full ${
+                            engineerPortalActiveProject === "ALL"
+                              ? "bg-indigo-800 text-indigo-100"
+                              : "bg-slate-100 text-slate-500"
+                          }`}>
+                            {allEngineerLogs.length}
+                          </span>
+                        </div>
+                        <span className={`text-[10px] block ${
+                          engineerPortalActiveProject === "ALL" ? "text-indigo-200" : "text-slate-400"
+                        }`}>
+                          Show all logs across all sites
+                        </span>
+                      </button>
+
+                      {/* Project-specific Buttons */}
+                      {uniqueProjectCodes.map((pCode) => {
+                        const logsForProj = logsByProject[pCode] || [];
+                        const count = logsForProj.length;
+                        const pc = combinedProjectCodes.find(c => c.code.toUpperCase() === pCode);
+                        const pName = pc ? pc.name : `${pCode} PROJECT`;
+                        const pLocation = pc ? pc.location : (logsForProj[0]?.projectLocation || "");
+                        const isSelected = engineerPortalActiveProject === pCode;
+
+                        return (
+                          <button
+                            key={pCode}
+                            type="button"
+                            onClick={() => {
+                              setEngineerPortalActiveProject(pCode);
+                              setEditingEngineerRecordId(null);
+                            }}
+                            className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer ${
+                              isSelected
+                                ? "bg-indigo-950 text-white border-transparent shadow-sm"
+                                : "bg-transparent text-slate-700 hover:bg-slate-50 hover:text-slate-900 border-transparent"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="text-xs font-bold uppercase tracking-wide font-mono">{pCode}</span>
+                              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full ${
+                                isSelected
+                                  ? "bg-indigo-800 text-indigo-100"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}>
+                                {count}
+                              </span>
+                            </div>
+                            <span className={`text-[11px] font-bold block uppercase tracking-tight truncate ${
+                              isSelected ? "text-white" : "text-slate-850"
+                            }`} title={pName}>
+                              {pName}
+                            </span>
+                            {pLocation && (
+                              <span className={`text-[10px] block font-medium uppercase truncate ${
+                                isSelected ? "text-indigo-200" : "text-slate-400"
+                              }`} title={pLocation}>
+                                {pLocation}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Right Panel - Log details & table */}
+                  <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 flex flex-col">
+                    {/* Selected Project Header */}
+                    <div className="bg-white border border-slate-200/80 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs shrink-0">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono font-bold bg-indigo-50 text-indigo-800 px-2.5 py-0.5 rounded-lg border border-indigo-100 uppercase">
+                            {engineerPortalActiveProject === "ALL" ? "GLOBAL VIEW" : "PROJECT ACCESS"}
+                          </span>
+                          {engineerPortalActiveProject !== "ALL" && (
+                            <span className="text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg border border-emerald-100 uppercase">
+                              ACTIVE
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-850 uppercase tracking-tight flex items-center gap-1.5 mt-1">
+                          {engineerPortalActiveProject === "ALL" ? (
+                            "All Projects Portfolio"
+                          ) : (
+                            <>
+                              Project {engineerPortalActiveProject}
+                            </>
+                          )}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          {engineerPortalActiveProject === "ALL" ? (
+                            "Viewing all daily progress logs registered under your profile."
+                          ) : (
+                            <>
+                              Managing activities and progress records for <strong className="text-indigo-600 font-semibold uppercase">{activeProjName}</strong> at <strong className="text-slate-700 font-semibold uppercase">{activeProjLoc || "N/A"}</strong>.
+                            </>
+                          )}
+                        </p>
+                      </div>
+                      {engineerPortalActiveProject !== "ALL" && (
+                        <div className="flex flex-col text-right shrink-0">
+                          <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wider">PROJECT SITE CODE</span>
+                          <span className="text-xs font-bold font-mono text-slate-800 mt-0.5 uppercase bg-slate-50 border border-slate-200 px-2 py-1 rounded-lg inline-block">
+                            {engineerPortalActiveProject}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Table View */}
+                    {filteredLogs.length === 0 ? (
+                      <div className="flex-1 py-12 text-center flex flex-col items-center justify-center bg-white border border-dashed border-slate-200 rounded-3xl p-8">
+                        <FileText className="h-10 w-10 text-slate-300 mb-3" />
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">No Activity Records Found</p>
+                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm">
+                          No daily progress entries were found under this project, or none match your search criteria.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col flex-1">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse min-w-[1200px]">
+                            <thead className="bg-[#1e1b4b] text-white sticky top-0 z-10 text-[10px] uppercase font-mono tracking-wider border-b border-indigo-950">
+                              <tr>
+                                <th className="py-3 px-3 font-bold text-center w-14 border-r border-indigo-950">S/NO.</th>
+                                <th className="py-3 px-4 font-bold w-44 border-r border-indigo-950">PROJECT CODE & LOCATION</th>
+                                <th className="py-3 px-3 font-bold text-center w-32 border-r border-indigo-950 font-mono">LOG DATE</th>
+                                <th className="py-3 px-4 font-bold w-56 border-r border-indigo-950 font-mono">NAME OF ACTIVITY</th>
+                                <th className="py-3 px-3 font-bold text-center w-36 border-r border-indigo-950">% WORK COMPLETED</th>
+                                <th className="py-3 px-3 font-bold text-center w-32 border-r border-indigo-950 font-mono">TARGET DATE</th>
+                                <th className="py-3 px-3 font-bold text-center w-36 border-r border-indigo-950 font-mono">WORK COMPLETED TODAY</th>
+                                <th className="py-3 px-3 font-bold text-center w-28 border-r border-indigo-950 font-mono">NO. LABOR</th>
+                                <th className="py-3 px-4 font-bold w-40 border-r border-indigo-950 font-mono">EQUIPMENT</th>
+                                <th className="py-3 px-4 font-bold w-52 border-r border-indigo-950 font-mono">REMARKS</th>
+                                <th className="py-3 px-4 font-bold text-center w-32">ACTIONS</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-xs font-medium">
+                              {filteredLogs.map((log, idx) => {
+                                const isEditing = editingEngineerRecordId === log.id;
+                                const cumVal = parseFloat(isEditing ? editEngineerForm.workCompletedPercent : (log.workCompletedPercent || "0"));
+                                const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+                                
+                                return (
+                                  <tr key={log.id} className={`transition-colors border-b border-slate-100 ${
+                                    isEditing ? "bg-indigo-50/20" : "hover:bg-slate-50/50"
+                                  }`}>
+                                    {/* S/NO */}
+                                    <td className="py-3 px-3 text-center border-r border-slate-100 text-slate-400 font-bold font-mono">
+                                      {idx + 1}
+                                    </td>
+
+                                    {/* PROJECT CODE & LOCATION */}
+                                    <td className="py-3 px-4 border-r border-slate-100">
+                                      {isEditing ? (
+                                        <div className="space-y-1.5">
+                                          <input
+                                            type="text"
+                                            value={editEngineerForm.project}
+                                            onChange={(e) => setEditEngineerForm(prev => ({ ...prev, project: e.target.value }))}
+                                            className="w-full bg-white border border-slate-250 rounded-lg px-2 py-1 text-xs uppercase font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none"
+                                            placeholder="Proj Code"
+                                          />
+                                          <input
+                                            type="text"
+                                            value={editEngineerForm.projectLocation}
+                                            onChange={(e) => setEditEngineerForm(prev => ({ ...prev, projectLocation: e.target.value }))}
+                                            className="w-full bg-white border border-slate-250 rounded-lg px-2 py-1 text-[11px] uppercase font-semibold text-slate-600 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none"
+                                            placeholder="Location"
+                                          />
+                                        </div>
+                                      ) : (
+                                        <div>
+                                          <span className="text-[11px] font-mono font-bold bg-indigo-50 text-indigo-800 px-2.5 py-0.5 rounded-lg border border-indigo-100 uppercase inline-block mb-1">
+                                            {log.project || "N/A"}
+                                          </span>
+                                          <div className="text-[10px] text-slate-500 font-medium uppercase truncate max-w-[150px]" title={log.projectLocation}>
+                                            {log.projectLocation || "N/A"}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </td>
+
+                                    {/* DATE */}
+                                    <td className="py-3 px-3 text-center border-r border-slate-100">
+                                      {isEditing ? (
+                                        <input
+                                          type="date"
+                                          value={editEngineerForm.date}
+                                          onChange={(e) => setEditEngineerForm(prev => ({ ...prev, date: e.target.value }))}
+                                          className="w-full bg-white border border-slate-250 rounded-lg px-1.5 py-1 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none font-mono"
+                                        />
+                                      ) : (
+                                        <span className="text-xs font-bold text-slate-500 font-mono">
+                                          {log.date}
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* ACTIVITY NAME */}
+                                    <td className="py-3 px-4 border-r border-slate-100 font-mono">
+                                      {isEditing ? (
+                                        <input
+                                          type="text"
+                                          value={editEngineerForm.activityName}
+                                          onChange={(e) => setEditEngineerForm(prev => ({ ...prev, activityName: e.target.value }))}
+                                          className="w-full bg-white border border-slate-250 rounded-lg px-2 py-1 text-xs uppercase font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none"
+                                          placeholder="Activity Name"
+                                        />
+                                      ) : (
+                                        <span className="font-bold text-slate-850 uppercase block whitespace-normal">
+                                          {log.activityName || "-"}
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* % WORK COMPLETED */}
+                                    <td className="py-3 px-3 border-r border-slate-100 text-center">
+                                      {isEditing ? (
+                                        <div className="flex items-center gap-1 justify-center">
+                                          <input
+                                            type="text"
+                                            value={editEngineerForm.workCompletedPercent}
+                                            onChange={(e) => setEditEngineerForm(prev => ({ ...prev, workCompletedPercent: e.target.value }))}
+                                            className="w-16 bg-white border border-slate-250 rounded-lg px-1 py-1 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none font-mono text-center"
+                                            placeholder="0"
+                                          />
+                                          <span className="text-xs font-bold text-slate-500 font-mono">%</span>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center gap-2 justify-center">
+                                          <div className="w-16 bg-slate-100 rounded-full h-1.5 overflow-hidden border border-slate-200">
+                                            <div 
+                                              className={`h-full rounded-full ${cleanCum === 100 ? "bg-emerald-500" : cleanCum > 50 ? "bg-amber-500" : "bg-indigo-500"}`}
+                                              style={{ width: `${cleanCum}%` }}
+                                            ></div>
+                                          </div>
+                                          <span className="font-bold font-mono text-[10px] text-slate-800">{log.workCompletedPercent || "0"}%</span>
+                                        </div>
+                                      )}
+                                    </td>
+
+                                    {/* TARGET DATE */}
+                                    <td className="py-3 px-3 text-center border-r border-slate-100 font-mono">
+                                      {isEditing ? (
+                                        <input
+                                          type="date"
+                                          value={editEngineerForm.targetDate}
+                                          onChange={(e) => setEditEngineerForm(prev => ({ ...prev, targetDate: e.target.value }))}
+                                          className="w-full bg-white border border-slate-250 rounded-lg px-1.5 py-1 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none font-mono"
+                                        />
+                                      ) : (
+                                        <span className="font-semibold text-slate-600 font-mono">
+                                          {log.targetDate || "-"}
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* WORK COMPLETED TODAY */}
+                                    <td className="py-3 px-3 text-center border-r border-slate-100">
+                                      {isEditing ? (
+                                        <div className="flex items-center gap-1 justify-center">
+                                          <span className="text-xs font-bold text-slate-400 font-mono">+</span>
+                                          <input
+                                            type="text"
+                                            value={editEngineerForm.workCompletedTodayPercent}
+                                            onChange={(e) => setEditEngineerForm(prev => ({ ...prev, workCompletedTodayPercent: e.target.value }))}
+                                            className="w-14 bg-white border border-slate-250 rounded-lg px-1 py-1 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none font-mono text-center"
+                                            placeholder="0"
+                                          />
+                                          <span className="text-xs font-bold text-slate-500 font-mono">%</span>
+                                        </div>
+                                      ) : (
+                                        log.workCompletedTodayPercent ? (
+                                          <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-100 px-2.5 py-0.5 rounded-full font-bold font-mono text-[10px]">
+                                            +{log.workCompletedTodayPercent}%
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-400 font-mono">-</span>
+                                        )
+                                      )}
+                                    </td>
+
+                                    {/* NO OF LABOR */}
+                                    <td className="py-3 px-3 text-center border-r border-slate-100">
+                                      {isEditing ? (
+                                        <input
+                                          type="text"
+                                          value={editEngineerForm.noOfLaborSubcontractor}
+                                          onChange={(e) => setEditEngineerForm(prev => ({ ...prev, noOfLaborSubcontractor: e.target.value }))}
+                                          className="w-16 bg-white border border-slate-250 rounded-lg px-1 py-1 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none font-mono text-center"
+                                          placeholder="0"
+                                        />
+                                      ) : (
+                                        <span className="font-mono font-bold text-slate-800">
+                                          {log.noOfLaborSubcontractor || "-"}
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* EQUIPMENT */}
+                                    <td className="py-3 px-4 border-r border-slate-100">
+                                      {isEditing ? (
+                                        <input
+                                          type="text"
+                                          value={editEngineerForm.equipment}
+                                          onChange={(e) => setEditEngineerForm(prev => ({ ...prev, equipment: e.target.value }))}
+                                          className="w-full bg-white border border-slate-250 rounded-lg px-2 py-1 text-xs uppercase font-semibold text-slate-850 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none"
+                                          placeholder="Equipment"
+                                        />
+                                      ) : (
+                                        <span className="text-slate-600 uppercase truncate block max-w-[150px]" title={log.equipment}>
+                                          {log.equipment || "-"}
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* REMARKS */}
+                                    <td className="py-3 px-4 border-r border-slate-100">
+                                      {isEditing ? (
+                                        <input
+                                          type="text"
+                                          value={editEngineerForm.remarks}
+                                          onChange={(e) => setEditEngineerForm(prev => ({ ...prev, remarks: e.target.value }))}
+                                          className="w-full bg-white border border-slate-250 rounded-lg px-2 py-1 text-xs uppercase font-semibold text-slate-850 focus:ring-2 focus:ring-indigo-500/15 focus:border-indigo-500 focus:outline-none"
+                                          placeholder="Remarks"
+                                        />
+                                      ) : (
+                                        <span className="text-slate-600 uppercase truncate block max-w-[180px]" title={log.remarks}>
+                                          {log.remarks || "-"}
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* ACTIONS */}
+                                    <td className="py-3 px-4 text-center">
+                                      {isEditing ? (
+                                        <div className="flex items-center justify-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleSaveEngineerRecord(log.id)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-colors"
+                                            title="Save Changes"
+                                          >
+                                            <Check className="h-3 w-3" /> Save
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditingEngineerRecordId(null)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-150 hover:bg-slate-200 text-slate-700 text-[10px] font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                                            title="Cancel"
+                                          >
+                                            <X className="h-3 w-3" /> Cancel
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingEngineerRecordId(log.id);
+                                            setEditEngineerForm({
+                                              activityName: log.activityName || "",
+                                              workCompletedPercent: log.workCompletedPercent || "",
+                                              targetDate: log.targetDate || "",
+                                              workCompletedTodayPercent: log.workCompletedTodayPercent || "",
+                                              noOfLaborSubcontractor: log.noOfLaborSubcontractor || "",
+                                              equipment: log.equipment || "",
+                                              remarks: log.remarks || "",
+                                              project: log.project || "",
+                                              date: log.date || "",
+                                              projectLocation: log.projectLocation || ""
+                                            });
+                                          }}
+                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 hover:bg-indigo-100 hover:text-indigo-700 border border-indigo-100 rounded-xl cursor-pointer transition-colors"
+                                        >
+                                          <Edit className="h-3.5 w-3.5" /> Edit Record
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Modal Footer */}
+            <div className="bg-slate-100 px-6 py-4 flex items-center justify-between border-t border-slate-200/60 shrink-0">
+              <span className="text-[10px] text-slate-400 font-mono">
+                ENGINEER PORTAL SECURE HANDLER
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEngineerPortalOpen(false);
+                  setEditingEngineerRecordId(null);
+                }}
+                className="px-5 py-2 text-xs font-bold uppercase tracking-wider text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-sm"
+              >
+                Close Portal
               </button>
             </div>
 
