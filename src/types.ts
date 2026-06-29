@@ -16,6 +16,7 @@ export interface Submission {
   noOfLaborSubcontractor?: string;
   equipment?: string;
   remarks?: string;
+  images?: string[];
 }
 
 export interface VerificationResponse {

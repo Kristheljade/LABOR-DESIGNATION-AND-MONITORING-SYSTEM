@@ -32,10 +32,13 @@ import {
   UserCheck,
   Check,
   X,
+  Plus,
   Edit,
   Eye,
   Heart,
-  Printer
+  Printer,
+  ChevronLeft,
+  ChevronRight
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -588,7 +591,8 @@ export default function App() {
     workCompletedTodayPercent: "",
     noOfLaborSubcontractor: "",
     equipment: "",
-    remarks: ""
+    remarks: "",
+    images: [] as string[]
   });
 
   const [viewingProgressSheet, setViewingProgressSheet] = useState<{
@@ -606,6 +610,21 @@ export default function App() {
   const [engineerSearchQuery, setEngineerSearchQuery] = useState("");
   const [editingEngineerRecordId, setEditingEngineerRecordId] = useState<string | null>(null);
   const [engineerPortalActiveProject, setEngineerPortalActiveProject] = useState<string>("ALL");
+  const [isAddingActivity, setIsAddingActivity] = useState<boolean>(false);
+  const [addActivityError, setAddActivityError] = useState<string>("");
+  const [isAddingActivitySubmitting, setIsAddingActivitySubmitting] = useState<boolean>(false);
+  const [newActivityForm, setNewActivityForm] = useState({
+    project: "",
+    projectLocation: "",
+    date: new Date().toISOString().split("T")[0],
+    activityName: "",
+    workCompletedPercent: "",
+    targetDate: "",
+    workCompletedTodayPercent: "",
+    noOfLaborSubcontractor: "",
+    equipment: "",
+    remarks: ""
+  });
   const [editEngineerForm, setEditEngineerForm] = useState({
     activityName: "",
     workCompletedPercent: "",
@@ -616,8 +635,45 @@ export default function App() {
     remarks: "",
     project: "",
     date: "",
-    projectLocation: ""
+    projectLocation: "",
+    images: [] as string[]
   });
+
+  // Dynamic Image Upload States for Daily Progress Monitoring Forms
+  const [formImages, setFormImages] = useState<string[]>([]);
+  const [engineerFormImages, setEngineerFormImages] = useState<string[]>([]);
+
+  // Lightbox Modal for displaying full-sized images
+  const [lightbox, setLightbox] = useState<{
+    isOpen: boolean;
+    images: string[];
+    activeIndex: number;
+    title?: string;
+  }>({
+    isOpen: false,
+    images: [],
+    activeIndex: 0,
+    title: ""
+  });
+
+  const handleDownloadLightboxImage = () => {
+    const currentImg = lightbox.images[lightbox.activeIndex];
+    if (!currentImg) return;
+    try {
+      const link = document.createElement("a");
+      link.href = currentImg;
+      const cleanTitle = (lightbox.title || "activity_photo")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_");
+      link.download = `${cleanTitle}_${lightbox.activeIndex + 1}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("Failed to download image", err);
+    }
+  };
   
   // Table search and filters
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -1287,6 +1343,7 @@ export default function App() {
         noOfLaborSubcontractor: formData.noOfLaborSubcontractor.trim(),
         equipment: formData.equipment.trim().toUpperCase(),
         remarks: formData.remarks.trim().toUpperCase(),
+        images: formImages,
       };
     }
 
@@ -1303,6 +1360,7 @@ export default function App() {
       if (res.ok) {
         setSubmitSuccess(true);
         setLastSubmittedName(activeFormTab === "attendance" ? payload.laborsName : payload.activityName);
+        setFormImages([]); // Reset uploaded pictures
         // Reset name block and task, keep project config to allow rapid logging of next worker
         setFormData(prev => ({
           ...prev,
@@ -1332,6 +1390,55 @@ export default function App() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Helper to compress and resize images to keep database entries light and fast
+  const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const MAX_WIDTH = 1024;
+          const MAX_HEIGHT = 1024;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            // Compress with a quality of 0.75 for a balance of visual clarity and compact size
+            const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.75);
+            resolve(compressedDataUrl);
+          } else {
+            resolve(event.target?.result as string);
+          }
+        };
+        img.onerror = (err) => {
+          reject(err);
+        };
+      };
+      reader.onerror = (err) => {
+        reject(err);
+      };
+    });
   };
 
   // Retrieve existing entries from persistent backend
@@ -2171,6 +2278,82 @@ export default function App() {
     }
   };
 
+  // Handle adding a completely new activity in the engineer portal
+  const handleAddNewActivity = async () => {
+    if (!newActivityForm.project.trim()) {
+      setAddActivityError("Please select/specify the Project Code.");
+      return;
+    }
+    if (!newActivityForm.date) {
+      setAddActivityError("Please specify the Log Date.");
+      return;
+    }
+    if (!newActivityForm.activityName.trim()) {
+      setAddActivityError("Please specify the Name of Activity.");
+      return;
+    }
+
+    setAddActivityError("");
+    setIsAddingActivitySubmitting(true);
+
+    try {
+      const payload = {
+        date: newActivityForm.date,
+        project: newActivityForm.project.trim().toUpperCase(),
+        projectLocation: newActivityForm.projectLocation.trim().toUpperCase(),
+        siteEngineer: (portalSelectedEngineer || "").trim().toUpperCase(),
+        laborsName: "",
+        designation: "",
+        reassignedTask: "",
+        attendanceStatus: "Present",
+        activityName: newActivityForm.activityName.trim().toUpperCase(),
+        workCompletedPercent: newActivityForm.workCompletedPercent.trim(),
+        targetDate: newActivityForm.targetDate.trim(),
+        workCompletedTodayPercent: newActivityForm.workCompletedTodayPercent.trim(),
+        noOfLaborSubcontractor: newActivityForm.noOfLaborSubcontractor.trim(),
+        equipment: newActivityForm.equipment.trim().toUpperCase(),
+        remarks: newActivityForm.remarks.trim().toUpperCase(),
+        images: engineerFormImages,
+      };
+
+      const res = await fetch("/api/submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        await fetchSubmissions();
+        await fetchLedgerFiles();
+
+        setIsAddingActivity(false);
+        setEngineerFormImages([]); // Clear uploaded pictures
+        setNewActivityForm({
+          project: engineerPortalActiveProject === "ALL" ? "" : engineerPortalActiveProject,
+          projectLocation: engineerPortalActiveProject === "ALL" ? "" : (newActivityForm.projectLocation),
+          date: new Date().toISOString().split("T")[0],
+          activityName: "",
+          workCompletedPercent: "",
+          targetDate: "",
+          workCompletedTodayPercent: "",
+          noOfLaborSubcontractor: "",
+          equipment: "",
+          remarks: ""
+        });
+
+        showNotification("Activity Added", "A new activity record has been successfully logged under your name.", "success");
+      } else {
+        const errData = await res.json();
+        setAddActivityError(errData.error || "Failed to add activity. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error adding activity:", err);
+      setAddActivityError("Network error. Could not connect to the database.");
+    } finally {
+      setIsAddingActivitySubmitting(false);
+    }
+  };
+
   // Dedicated PDF Exporter for Daily Activity & Progress Monitoring Logs
   const exportMonitoringPDF = async (filteredLogs: Submission[]) => {
     try {
@@ -2888,6 +3071,63 @@ export default function App() {
                             onChange={(e) => setFormData(prev => ({ ...prev, remarks: e.target.value }))}
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/5 focus:border-slate-700 text-sm font-semibold text-slate-800 transition-all uppercase"
                           />
+                        </div>
+
+                        {/* Picture Upload Area */}
+                        <div className="flex flex-col md:col-span-2 lg:col-span-3 mt-2">
+                          <label className="text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                            <PlusCircle className="h-3.5 w-3.5 text-slate-400" /> Activity Pictures / Attachments
+                          </label>
+                          <div className="bg-slate-50 border-2 border-dashed border-slate-200 hover:border-slate-300 transition-all rounded-xl p-6 flex flex-col items-center justify-center relative cursor-pointer group">
+                            <input
+                              type="file"
+                              multiple
+                              accept="image/*"
+                              onChange={async (e) => {
+                                const files = e.target.files;
+                                if (files) {
+                                  const promises = Array.from(files).map((file: any) => compressImage(file));
+                                  try {
+                                    const base64Images = await Promise.all(promises);
+                                    setFormImages(prev => [...prev, ...base64Images]);
+                                  } catch (err) {
+                                    console.error("Image compression failed", err);
+                                  }
+                                }
+                              }}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                            />
+                            <div className="flex flex-col items-center justify-center text-center pointer-events-none">
+                              <div className="bg-white p-2 rounded-full shadow-xs border border-slate-100 mb-2 group-hover:scale-105 transition-transform">
+                                <Plus className="h-4 w-4 text-slate-500" />
+                              </div>
+                              <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">Drag & drop or Click to Upload Pictures</p>
+                              <p className="text-[9px] font-mono text-slate-400 mt-0.5">JPEG, PNG files are automatically resized & compressed</p>
+                            </div>
+                          </div>
+
+                          {formImages.length > 0 && (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 mt-4 p-3 bg-slate-50/50 rounded-xl border border-slate-150">
+                              {formImages.map((img, index) => (
+                                <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 shadow-2xs group bg-white">
+                                  <img 
+                                    src={img} 
+                                    alt={`Attachment ${index + 1}`} 
+                                    className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                    onClick={() => setLightbox({ isOpen: true, images: formImages, activeIndex: index, title: "Uploaded Activity Picture" })}
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setFormImages(prev => prev.filter((_, i) => i !== index))}
+                                    className="absolute top-1 right-1 bg-slate-900/80 hover:bg-rose-600 p-1 rounded-full text-white transition-colors shadow-sm cursor-pointer z-20"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -4269,6 +4509,7 @@ export default function App() {
                                                   <th className="py-2.5 px-3 font-bold border-r border-slate-300 text-center w-40">NO. LABOR / SUBCONTRACTOR</th>
                                                   <th className="py-2.5 px-4 font-bold border-r border-slate-300">EQUIPMENT</th>
                                                   <th className="py-2.5 px-4 font-bold border-r border-slate-300">REMARKS</th>
+                                                  <th className="py-2.5 px-4 border-r border-slate-300 text-center w-28">PICTURES</th>
                                                   <th className="py-2.5 px-3 font-bold text-center w-24">ACTIONS</th>
                                                 </tr>
                                               </thead>
@@ -4348,6 +4589,50 @@ export default function App() {
                                                           className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs uppercase focus:ring-1 focus:ring-blue-500 focus:outline-none font-sans"
                                                         />
                                                       </td>
+                                                      <td className="py-2 px-2 border-r border-slate-200">
+                                                        <div className="flex flex-col gap-1.5 items-center justify-center">
+                                                          <div className="flex flex-wrap gap-1 max-w-[120px] max-h-[80px] overflow-y-auto justify-center">
+                                                            {(editProgressForm.images || []).map((img, idx) => (
+                                                              <div key={idx} className="relative w-7 h-7 rounded border border-slate-200 overflow-hidden shrink-0">
+                                                                <img 
+                                                                  src={img} 
+                                                                  className="w-full h-full object-cover cursor-pointer" 
+                                                                  onClick={() => setLightbox({ isOpen: true, images: editProgressForm.images, activeIndex: idx, title: "Edit Progress Photo" })} 
+                                                                  referrerPolicy="no-referrer" 
+                                                                />
+                                                                <button 
+                                                                  type="button" 
+                                                                  onClick={() => setEditProgressForm(prev => ({ ...prev, images: prev.images.filter((_, i) => i !== idx) }))} 
+                                                                  className="absolute -top-0.5 -right-0.5 bg-rose-600 rounded-full text-white p-0.5 hover:bg-rose-700 cursor-pointer z-10"
+                                                                >
+                                                                  <X className="h-1.5 w-1.5" />
+                                                                </button>
+                                                              </div>
+                                                            ))}
+                                                          </div>
+                                                          <label className="relative inline-flex items-center justify-center px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-[9px] font-bold text-indigo-700 rounded cursor-pointer border border-indigo-100 uppercase tracking-wider text-center">
+                                                            Add
+                                                            <input 
+                                                              type="file" 
+                                                              multiple 
+                                                              accept="image/*" 
+                                                              onChange={async (e) => {
+                                                                const files = e.target.files;
+                                                                if (files) {
+                                                                  const promises = Array.from(files).map((f: any) => compressImage(f));
+                                                                  try {
+                                                                    const resImgs = await Promise.all(promises);
+                                                                    setEditProgressForm(prev => ({ ...prev, images: [...prev.images, ...resImgs] }));
+                                                                  } catch (err) { 
+                                                                    console.error(err); 
+                                                                  }
+                                                                }
+                                                              }} 
+                                                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                                                            />
+                                                          </label>
+                                                        </div>
+                                                      </td>
                                                       <td className="py-2 px-2 text-center">
                                                         <div className="flex items-center justify-center gap-1.5">
                                                           <button
@@ -4422,6 +4707,25 @@ export default function App() {
                                                       <td className="py-3 px-4 border-r border-slate-200 text-slate-600 uppercase font-medium">
                                                         {row.remarks || "-"}
                                                       </td>
+                                                      <td className="py-3 px-4 border-r border-slate-200 text-center">
+                                                        {row.images && row.images.length > 0 ? (
+                                                          <div className="flex flex-wrap gap-1 justify-center max-w-[120px]">
+                                                            {row.images.map((img, imgIdx) => (
+                                                              <div key={imgIdx} className="w-8 h-8 rounded border border-slate-200 overflow-hidden shadow-2xs hover:scale-105 transition-transform shrink-0">
+                                                                <img
+                                                                  src={img}
+                                                                  alt="Log Photo"
+                                                                  className="w-full h-full object-cover cursor-pointer"
+                                                                  onClick={() => setLightbox({ isOpen: true, images: row.images || [], activeIndex: imgIdx, title: `${row.activityName || "Activity"} Photo` })}
+                                                                  referrerPolicy="no-referrer"
+                                                                />
+                                                              </div>
+                                                            ))}
+                                                          </div>
+                                                        ) : (
+                                                          <span className="text-slate-400 font-mono block text-center">-</span>
+                                                        )}
+                                                      </td>
                                                       <td className="py-3 px-3 text-center">
                                                         <div className="flex items-center justify-center gap-1.5">
                                                           <button
@@ -4434,7 +4738,8 @@ export default function App() {
                                                                 workCompletedTodayPercent: row.workCompletedTodayPercent || "",
                                                                 noOfLaborSubcontractor: row.noOfLaborSubcontractor || "",
                                                                 equipment: row.equipment || "",
-                                                                remarks: row.remarks || ""
+                                                                remarks: row.remarks || "",
+                                                                images: row.images || []
                                                               });
                                                             }}
                                                             className="p-1 text-slate-600 hover:bg-slate-100 rounded-lg border border-transparent hover:border-slate-200 transition-colors cursor-pointer inline-flex items-center justify-center"
@@ -4466,6 +4771,7 @@ export default function App() {
                                                   <td className="py-2 px-3 border-r border-slate-300 font-bold font-mono text-[11px] text-[#375623]">
                                                     {dayEntries.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0) || "-"}
                                                   </td>
+                                                  <td className="py-2 px-4 border-r border-slate-300"></td>
                                                   <td className="py-2 px-4 border-r border-slate-300"></td>
                                                   <td className="py-2 px-4 border-r border-slate-300"></td>
                                                   <td className="py-2 px-3"></td>
@@ -5611,7 +5917,8 @@ export default function App() {
                         <th className="py-3 px-3 font-bold text-center w-40 border-r border-[#153a5b]">WORK COMPLETED TODAY</th>
                         <th className="py-3 px-3 font-bold text-center w-40 border-r border-[#153a5b]">NO. LABOR</th>
                         <th className="py-3 px-4 font-bold border-r border-[#153a5b]">EQUIPMENT</th>
-                        <th className="py-3 px-4 font-bold">REMARKS</th>
+                        <th className="py-3 px-4 font-bold border-r border-[#153a5b]">REMARKS</th>
+                        <th className="py-3 px-4 font-bold text-center w-28">PICTURES</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs font-medium">
@@ -5647,12 +5954,31 @@ export default function App() {
                               {r.noOfLaborSubcontractor || "-"}
                             </td>
                             <td className="py-2.5 px-4 text-slate-600 uppercase border-r border-slate-100">{r.equipment || "-"}</td>
-                            <td className="py-2.5 px-4 text-slate-600 uppercase">{r.remarks || "-"}</td>
+                            <td className="py-2.5 px-4 text-slate-600 uppercase border-r border-slate-100">{r.remarks || "-"}</td>
+                            <td className="py-2.5 px-4 text-center">
+                              {r.images && r.images.length > 0 ? (
+                                <div className="flex flex-wrap gap-1 justify-center max-w-[120px]">
+                                  {r.images.map((img, imgIdx) => (
+                                    <div key={imgIdx} className="w-8 h-8 rounded border border-slate-200 overflow-hidden shadow-2xs hover:scale-105 transition-transform shrink-0">
+                                      <img
+                                        src={img}
+                                        alt="Log Photo"
+                                        className="w-full h-full object-cover cursor-pointer"
+                                        onClick={() => setLightbox({ isOpen: true, images: r.images || [], activeIndex: imgIdx, title: `${r.activityName || "Activity"} Photo` })}
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-400 font-mono block text-center">-</span>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
                     </tbody>
-                  </table>
+                    </table>
                 </div>
               </div>
             </div>
@@ -5802,6 +6128,13 @@ export default function App() {
                         onClick={() => {
                           setEngineerPortalActiveProject("ALL");
                           setEditingEngineerRecordId(null);
+                          setNewActivityForm(prev => ({
+                            ...prev,
+                            project: "",
+                            projectLocation: ""
+                          }));
+                          setAddActivityError("");
+                          setIsAddingActivity(false);
                         }}
                         className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer ${
                           engineerPortalActiveProject === "ALL"
@@ -5836,12 +6169,17 @@ export default function App() {
                         const isSelected = engineerPortalActiveProject === pCode;
 
                         return (
-                          <button
+                          <div
                             key={pCode}
-                            type="button"
                             onClick={() => {
                               setEngineerPortalActiveProject(pCode);
                               setEditingEngineerRecordId(null);
+                              setNewActivityForm(prev => ({
+                                ...prev,
+                                project: pCode,
+                                projectLocation: pLocation
+                              }));
+                              setAddActivityError("");
                             }}
                             className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer ${
                               isSelected
@@ -5871,7 +6209,41 @@ export default function App() {
                                 {pLocation}
                               </span>
                             )}
-                          </button>
+                            
+                            {/* Inline Add Activity Button directly inside each recorded project */}
+                            <div className="mt-2.5 pt-2.5 border-t border-slate-100/10 flex justify-between items-center">
+                              <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400">RECORDED PROJECT</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEngineerPortalActiveProject(pCode);
+                                  setEditingEngineerRecordId(null);
+                                  setNewActivityForm({
+                                    project: pCode,
+                                    projectLocation: pLocation,
+                                    date: new Date().toISOString().split("T")[0],
+                                    activityName: "",
+                                    workCompletedPercent: "",
+                                    targetDate: "",
+                                    workCompletedTodayPercent: "",
+                                    noOfLaborSubcontractor: "",
+                                    equipment: "",
+                                    remarks: ""
+                                  });
+                                  setAddActivityError("");
+                                  setIsAddingActivity(true);
+                                }}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-md shadow-xs transition-colors cursor-pointer ${
+                                  isSelected 
+                                    ? "bg-indigo-600 hover:bg-indigo-700 text-white" 
+                                    : "bg-indigo-50 hover:bg-indigo-100 text-indigo-600"
+                                }`}
+                              >
+                                <Plus className="h-2.5 w-2.5" /> Add Activity
+                              </button>
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
@@ -5911,15 +6283,329 @@ export default function App() {
                           )}
                         </p>
                       </div>
-                      {engineerPortalActiveProject !== "ALL" && (
-                        <div className="flex flex-col text-right shrink-0">
-                          <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wider">PROJECT SITE CODE</span>
-                          <span className="text-xs font-bold font-mono text-slate-800 mt-0.5 uppercase bg-slate-50 border border-slate-200 px-2 py-1 rounded-lg inline-block">
-                            {engineerPortalActiveProject}
-                          </span>
-                        </div>
-                      )}
+                      
+                      <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
+                        {engineerPortalActiveProject !== "ALL" && (
+                          <div className="flex flex-col text-right">
+                            <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-wider">PROJECT SITE CODE</span>
+                            <span className="text-xs font-bold font-mono text-slate-800 mt-0.5 uppercase bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg inline-block text-center min-w-[70px]">
+                              {engineerPortalActiveProject}
+                            </span>
+                          </div>
+                        )}
+                        {engineerPortalActiveProject !== "ALL" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewActivityForm({
+                                project: engineerPortalActiveProject === "ALL" ? "" : engineerPortalActiveProject,
+                                projectLocation: engineerPortalActiveProject === "ALL" ? "" : (activeProjLoc || ""),
+                                date: new Date().toISOString().split("T")[0],
+                                activityName: "",
+                                workCompletedPercent: "",
+                                targetDate: "",
+                                workCompletedTodayPercent: "",
+                                noOfLaborSubcontractor: "",
+                                equipment: "",
+                                remarks: ""
+                              });
+                              setAddActivityError("");
+                              setIsAddingActivity(!isAddingActivity);
+                            }}
+                            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-all ${
+                              isAddingActivity 
+                                ? "bg-rose-600 hover:bg-rose-700 text-white" 
+                                : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                            }`}
+                          >
+                            {isAddingActivity ? (
+                              <>
+                                <X className="h-4 w-4" /> Cancel Activity
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="h-4 w-4" /> Add Activity
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Add Activity Inline Panel */}
+                    {isAddingActivity && (
+                      <div className="bg-white border-2 border-indigo-100 rounded-2xl p-4 md:p-6 shadow-md space-y-4 animate-slide-down shrink-0">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                              <Plus className="h-4 w-4" />
+                            </div>
+                            <h5 className="text-xs font-bold uppercase tracking-wider text-indigo-950">Add New Daily Activity Record</h5>
+                          </div>
+                          <button 
+                            type="button" 
+                            onClick={() => setIsAddingActivity(false)}
+                            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        {addActivityError && (
+                          <div className="bg-rose-50 border border-rose-100 text-rose-700 text-xs font-semibold px-4 py-3 rounded-xl flex items-center gap-2">
+                            <AlertCircle className="h-4 w-4 shrink-0" />
+                            <span>{addActivityError}</span>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                          {/* Project Code selection */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Project Site Code *
+                            </label>
+                            {engineerPortalActiveProject !== "ALL" ? (
+                              <input
+                                type="text"
+                                readOnly
+                                value={newActivityForm.project}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-500 cursor-not-allowed uppercase font-mono"
+                              />
+                            ) : (
+                              <select
+                                value={newActivityForm.project}
+                                onChange={(e) => {
+                                  const code = e.target.value;
+                                  const combinedProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+                                  const match = combinedProjectCodes.find(pc => pc.code.toUpperCase() === code.toUpperCase());
+                                  setNewActivityForm(prev => ({
+                                    ...prev,
+                                    project: code,
+                                    projectLocation: match ? match.location : ""
+                                  }));
+                                }}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 uppercase font-mono cursor-pointer"
+                              >
+                                <option value="">-- SELECT PROJECT --</option>
+                                {(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).map(pc => (
+                                  <option key={pc.code} value={pc.code}>
+                                    {pc.code} - {pc.name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+
+                          {/* Project Location */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Site Location
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Site Location"
+                              value={newActivityForm.projectLocation}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, projectLocation: e.target.value }))}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-600 uppercase"
+                              readOnly={true}
+                            />
+                          </div>
+
+                          {/* Log Date */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Log Date *
+                            </label>
+                            <input
+                              type="date"
+                              value={newActivityForm.date}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, date: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 font-mono"
+                            />
+                          </div>
+
+                          {/* Name of Activity */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Name of Activity *
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. EXCAVATION WORK"
+                              value={newActivityForm.activityName}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, activityName: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
+                            />
+                          </div>
+
+                          {/* % Work Completed */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              % Work Completed
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. 45"
+                              value={newActivityForm.workCompletedPercent}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, workCompletedPercent: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 font-mono"
+                            />
+                          </div>
+
+                          {/* Target Date */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Target Date
+                            </label>
+                            <input
+                              type="date"
+                              value={newActivityForm.targetDate}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, targetDate: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 font-mono"
+                            />
+                          </div>
+
+                          {/* Work Completed Today */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Work Completed Today (%)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. 5"
+                              value={newActivityForm.workCompletedTodayPercent}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, workCompletedTodayPercent: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 font-mono"
+                            />
+                          </div>
+
+                          {/* No. of Labor */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              No. of Labor
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. 3"
+                              value={newActivityForm.noOfLaborSubcontractor}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, noOfLaborSubcontractor: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 font-mono"
+                            />
+                          </div>
+
+                          {/* Equipment */}
+                          <div>
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Equipment Used
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. EXCAVATOR"
+                              value={newActivityForm.equipment}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, equipment: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
+                            />
+                          </div>
+
+                          {/* Remarks */}
+                          <div className="sm:col-span-2 md:col-span-3">
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
+                              Remarks
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. ON GOING / COMPLETED"
+                              value={newActivityForm.remarks}
+                              onChange={(e) => setNewActivityForm(prev => ({ ...prev, remarks: e.target.value }))}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
+                            />
+                          </div>
+
+                          {/* Engineer Picture Upload Area */}
+                          <div className="sm:col-span-2 md:col-span-3">
+                            <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                              <PlusCircle className="h-3.5 w-3.5 text-slate-400" /> Activity Pictures / Attachments
+                            </label>
+                            <div className="bg-slate-50 border-2 border-dashed border-slate-200 hover:border-slate-300 transition-all rounded-xl p-5 flex flex-col items-center justify-center relative cursor-pointer group">
+                              <input
+                                type="file"
+                                multiple
+                                accept="image/*"
+                                onChange={async (e) => {
+                                  const files = e.target.files;
+                                  if (files) {
+                                    const promises = Array.from(files).map((file: any) => compressImage(file));
+                                    try {
+                                      const base64Images = await Promise.all(promises);
+                                      setEngineerFormImages(prev => [...prev, ...base64Images]);
+                                    } catch (err) {
+                                      console.error("Image compression failed", err);
+                                    }
+                                  }
+                                }}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              />
+                              <div className="flex flex-col items-center justify-center text-center pointer-events-none">
+                                <div className="bg-white p-2 rounded-full shadow-xs border border-slate-100 mb-1 group-hover:scale-105 transition-transform">
+                                  <Plus className="h-3.5 w-3.5 text-slate-500" />
+                                </div>
+                                <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Drag & drop or Click to Upload Pictures</p>
+                                <p className="text-[9px] font-mono text-slate-400">JPEG, PNG files are automatically compressed</p>
+                              </div>
+                            </div>
+
+                            {engineerFormImages.length > 0 && (
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 p-2 bg-slate-50/50 rounded-xl border border-slate-150">
+                                {engineerFormImages.map((img, index) => (
+                                  <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 shadow-2xs group bg-white">
+                                    <img 
+                                      src={img} 
+                                      alt={`Attachment ${index + 1}`} 
+                                      className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                      onClick={() => setLightbox({ isOpen: true, images: engineerFormImages, activeIndex: index, title: "Uploaded Activity Picture" })}
+                                      referrerPolicy="no-referrer"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setEngineerFormImages(prev => prev.filter((_, i) => i !== index))}
+                                      className="absolute top-1 right-1 bg-slate-900/80 hover:bg-rose-600 p-1 rounded-full text-white transition-colors shadow-sm cursor-pointer z-20"
+                                    >
+                                      <X className="h-2.5 w-2.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => setIsAddingActivity(false)}
+                            className="px-4 py-2 text-xs font-bold uppercase text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isAddingActivitySubmitting}
+                            onClick={handleAddNewActivity}
+                            className="px-5 py-2 text-xs font-bold uppercase tracking-wider text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors cursor-pointer shadow-sm disabled:opacity-50 inline-flex items-center gap-1.5"
+                          >
+                            {isAddingActivitySubmitting ? (
+                              <>
+                                <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Saving...
+                              </>
+                            ) : (
+                              <>
+                                <Check className="h-3.5 w-3.5" /> Save Activity
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Table View */}
                     {filteredLogs.length === 0 ? (
@@ -5946,6 +6632,7 @@ export default function App() {
                                 <th className="py-3 px-3 font-bold text-center w-28 border-r border-indigo-950 font-mono">NO. LABOR</th>
                                 <th className="py-3 px-4 font-bold w-40 border-r border-indigo-950 font-mono">EQUIPMENT</th>
                                 <th className="py-3 px-4 font-bold w-52 border-r border-indigo-950 font-mono">REMARKS</th>
+                                <th className="py-3 px-4 border-r border-indigo-950 font-mono text-center w-36">PICTURES</th>
                                 <th className="py-3 px-4 font-bold text-center w-32">ACTIONS</th>
                               </tr>
                             </thead>
@@ -6146,6 +6833,72 @@ export default function App() {
                                       )}
                                     </td>
 
+                                    {/* PICTURES */}
+                                    <td className="py-3 px-4 border-r border-slate-100 text-center">
+                                      {isEditing ? (
+                                        <div className="flex flex-col gap-1.5 items-center justify-center">
+                                          <div className="flex flex-wrap gap-1 max-w-[120px] max-h-[80px] overflow-y-auto justify-center">
+                                            {(editEngineerForm.images || []).map((img, idx) => (
+                                              <div key={idx} className="relative w-7 h-7 rounded border border-slate-200 overflow-hidden shrink-0">
+                                                <img 
+                                                  src={img} 
+                                                  className="w-full h-full object-cover cursor-pointer" 
+                                                  onClick={() => setLightbox({ isOpen: true, images: editEngineerForm.images || [], activeIndex: idx, title: "Edit Activity Photo" })} 
+                                                  referrerPolicy="no-referrer" 
+                                                />
+                                                <button 
+                                                  type="button" 
+                                                  onClick={() => setEditEngineerForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== idx) }))} 
+                                                  className="absolute -top-0.5 -right-0.5 bg-rose-600 rounded-full text-white p-0.5 hover:bg-rose-700 cursor-pointer z-10"
+                                                >
+                                                  <X className="h-1.5 w-1.5" />
+                                                </button>
+                                              </div>
+                                            ))}
+                                          </div>
+                                          <label className="relative inline-flex items-center justify-center px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-[9px] font-bold text-indigo-700 rounded cursor-pointer border border-indigo-100 uppercase tracking-wider text-center">
+                                            Add
+                                            <input 
+                                              type="file" 
+                                              multiple 
+                                              accept="image/*" 
+                                              onChange={async (e) => {
+                                                const files = e.target.files;
+                                                if (files) {
+                                                  const promises = Array.from(files).map((f: any) => compressImage(f));
+                                                  try {
+                                                    const resImgs = await Promise.all(promises);
+                                                    setEditEngineerForm(prev => ({ ...prev, images: [...(prev.images || []), ...resImgs] }));
+                                                  } catch (err) { 
+                                                    console.error(err); 
+                                                  }
+                                                }
+                                              }} 
+                                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                                            />
+                                          </label>
+                                        </div>
+                                      ) : (
+                                        log.images && log.images.length > 0 ? (
+                                          <div className="flex flex-wrap gap-1 justify-center max-w-[120px]">
+                                            {log.images.map((img, imgIdx) => (
+                                              <div key={imgIdx} className="w-8 h-8 rounded border border-slate-200 overflow-hidden shadow-2xs hover:scale-105 transition-transform shrink-0">
+                                                <img
+                                                  src={img}
+                                                  alt="Log Photo"
+                                                  className="w-full h-full object-cover cursor-pointer"
+                                                  onClick={() => setLightbox({ isOpen: true, images: log.images || [], activeIndex: imgIdx, title: `${log.activityName || "Activity"} Photo` })}
+                                                  referrerPolicy="no-referrer"
+                                                />
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-400 font-mono block text-center">-</span>
+                                        )
+                                      )}
+                                    </td>
+
                                     {/* ACTIONS */}
                                     <td className="py-3 px-4 text-center">
                                       {isEditing ? (
@@ -6182,7 +6935,8 @@ export default function App() {
                                               remarks: log.remarks || "",
                                               project: log.project || "",
                                               date: log.date || "",
-                                              projectLocation: log.projectLocation || ""
+                                              projectLocation: log.projectLocation || "",
+                                              images: log.images || []
                                             });
                                           }}
                                           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 hover:bg-indigo-100 hover:text-indigo-700 border border-indigo-100 rounded-xl cursor-pointer transition-colors"
@@ -6222,6 +6976,99 @@ export default function App() {
             </div>
 
           </div>
+        </div>
+      )}
+
+      {/* FULL SCREEN LIGHTBOX / IMAGE VIEWER WITH DOWNLOAD */}
+      {lightbox.isOpen && lightbox.images && lightbox.images.length > 0 && (
+        <div className="fixed inset-0 z-55 flex flex-col justify-between bg-slate-950/95 backdrop-blur-md p-4 animate-fade-in">
+          {/* Lightbox Header */}
+          <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800/80 shrink-0">
+            <div>
+              <h4 className="text-sm font-bold text-slate-100 uppercase tracking-wider font-display">
+                {lightbox.title || "Image Viewer"}
+              </h4>
+              {lightbox.images.length > 1 && (
+                <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                  Image {lightbox.activeIndex + 1} of {lightbox.images.length}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleDownloadLightboxImage}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold uppercase tracking-wider rounded-xl transition-colors cursor-pointer shadow-md"
+                title="Download this picture"
+              >
+                <Download className="h-3.5 w-3.5" /> Download
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightbox(prev => ({ ...prev, isOpen: false }))}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-colors cursor-pointer"
+                title="Close Viewer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Lightbox Main Stage */}
+          <div className="flex-1 flex items-center justify-center relative min-h-0 py-4">
+            {lightbox.images.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setLightbox(prev => ({ ...prev, activeIndex: (prev.activeIndex - 1 + prev.images.length) % prev.images.length }))}
+                className="absolute left-4 p-3 bg-slate-900/60 hover:bg-slate-800 text-slate-200 hover:text-white rounded-full border border-slate-800/50 transition-colors cursor-pointer z-10"
+                title="Previous Image"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+            )}
+
+            <div className="max-w-full max-h-full flex items-center justify-center p-2">
+              <img
+                src={lightbox.images[lightbox.activeIndex]}
+                alt="Full preview"
+                className="max-h-[70vh] max-w-full object-contain rounded-2xl shadow-2xl border border-slate-800/50"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+
+            {lightbox.images.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setLightbox(prev => ({ ...prev, activeIndex: (prev.activeIndex + 1) % prev.images.length }))}
+                className="absolute right-4 p-3 bg-slate-900/60 hover:bg-slate-800 text-slate-200 hover:text-white rounded-full border border-slate-800/50 transition-colors cursor-pointer z-10"
+                title="Next Image"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            )}
+          </div>
+
+          {/* Lightbox Footer Thumbnail Strip */}
+          {lightbox.images.length > 1 && (
+            <div className="py-2 shrink-0 flex justify-center gap-2 border-t border-slate-900 overflow-x-auto max-w-full">
+              {lightbox.images.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setLightbox(prev => ({ ...prev, activeIndex: idx }))}
+                  className={`w-12 h-12 rounded-lg border-2 overflow-hidden transition-all shrink-0 ${idx === lightbox.activeIndex ? "border-indigo-500 scale-105" : "border-slate-800 opacity-60 hover:opacity-100"}`}
+                >
+                  <img
+                    src={img}
+                    alt="Thumbnail"
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

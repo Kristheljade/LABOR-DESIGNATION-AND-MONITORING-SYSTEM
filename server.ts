@@ -13,7 +13,7 @@ import {
   getDoc,
   setDoc, 
   deleteDoc
-} from "firebase/firestore";
+} from "firebase/firestore/lite";
 
 dotenv.config();
 
@@ -21,7 +21,8 @@ const app = express();
 const PORT = 3000;
 const DATA_FILE = path.join(process.cwd(), "entries.json");
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Dynamic/Lazy Firebase setup
 let db: any = null;
@@ -690,7 +691,8 @@ app.post("/api/submissions", async (req, res) => {
       workCompletedTodayPercent,
       noOfLaborSubcontractor,
       equipment,
-      remarks
+      remarks,
+      images
     } = req.body;
     
     const isMonitoringOnly = !!(activityName && activityName.trim());
@@ -744,6 +746,7 @@ app.post("/api/submissions", async (req, res) => {
       noOfLaborSubcontractor: noOfLaborSubcontractor || "",
       equipment: equipment || "",
       remarks: remarks || "",
+      images: images || [],
       createdAt: new Date().toISOString()
     };
 
@@ -797,7 +800,8 @@ app.put("/api/submissions/:id", async (req, res) => {
       workCompletedTodayPercent,
       noOfLaborSubcontractor,
       equipment,
-      remarks
+      remarks,
+      images
     } = req.body;
 
     let submissions = await readLocalSubmissions();
@@ -860,6 +864,7 @@ app.put("/api/submissions/:id", async (req, res) => {
         noOfLaborSubcontractor: noOfLaborSubcontractor !== undefined ? noOfLaborSubcontractor : originalRecord.noOfLaborSubcontractor,
         equipment: equipment !== undefined ? equipment : originalRecord.equipment,
         remarks: remarks !== undefined ? remarks : originalRecord.remarks,
+        images: images !== undefined ? images : originalRecord.images,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -905,6 +910,7 @@ app.put("/api/submissions/:id", async (req, res) => {
       noOfLaborSubcontractor: noOfLaborSubcontractor !== undefined ? noOfLaborSubcontractor : submissions[index].noOfLaborSubcontractor,
       equipment: equipment !== undefined ? equipment : submissions[index].equipment,
       remarks: remarks !== undefined ? remarks : submissions[index].remarks,
+      images: images !== undefined ? images : submissions[index].images,
       updatedAt: new Date().toISOString()
     };
 
@@ -1169,133 +1175,86 @@ app.get("/api/export", requireAdmin, async (req, res) => {
   }
 });
 
-// Seed June 2026 progress monitoring records if missing
-async function seedJuneProgressMonitoring() {
+// Clean up and remove pre-encoded records from June 1 to 30
+async function cleanupPreEncodedRecords() {
   try {
-    const firestoreDb = await getDb();
-    if (!firestoreDb) {
-      console.warn("Firestore not connected, skipping June seeding helper.");
-      return;
-    }
-
     const DATA_FILE = path.join(process.cwd(), "entries.json");
-
-    // Check if we already have progress monitoring records in June 2026
-    let submissions: any[] = [];
+    let localSubmissions: any[] = [];
     try {
-      submissions = await readLocalSubmissions();
-      if (submissions.length === 0) {
-        const colRef = collection(firestoreDb, "submissions");
-        const querySnapshot = await getDocs(colRef);
-        querySnapshot.forEach((doc) => {
-          submissions.push({ id: doc.id, ...doc.data() });
-        });
+      if (existsSync(DATA_FILE)) {
+        const data = await fs.readFile(DATA_FILE, "utf-8");
+        localSubmissions = JSON.parse(data || "[]");
       }
     } catch (e) {
-      console.warn("Failed to read initial submissions for seed check:", e);
+      console.warn("Failed to read entries.json for database cleanup:", e);
     }
 
-    const juneProgressCount = submissions.filter((s: any) => 
-      s.activityName && 
-      s.activityName.trim() !== "" && 
-      s.date && 
-      s.date.startsWith("2026-06")
-    ).length;
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      console.log("Checking Firestore database for pre-encoded June 1 to 30 records...");
+      const colRef = collection(firestoreDb, "submissions");
+      const querySnapshot = await getDocs(colRef);
+      const toDelete: string[] = [];
 
-    if (juneProgressCount >= 100) {
-      console.log(`June progress monitoring seeding skipped: already has ${juneProgressCount} records.`);
-      return;
-    }
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const docId = docSnap.id;
+        const dateVal = data.date || "";
 
-    console.log(`Seeding June progress monitoring records... (currently has ${juneProgressCount})`);
+        // Identify pre-encoded June records:
+        // 1. Starts with seed-june-
+        // 2. Or is a record with date in June 2026 that does NOT exist in local backup entries.json
+        const isSeedId = docId.startsWith("seed-june-");
+        const isJuneDate = dateVal.startsWith("2026-06-");
+        const existsLocally = localSubmissions.some((ls: any) => ls.id === docId);
 
-    // Load project codes
-    const projects = await getProjectCodes();
-    if (projects.length === 0) {
-      console.warn("No projects found to seed June progress monitoring.");
-      return;
-    }
-
-    const seededSubmissions = [...submissions];
-    const newRecords: any[] = [];
-
-    const activitiesByProject: Record<string, { activity: string, engineer: string, equipment: string, basePercent: number, step: number }> = {
-      "1038": { activity: "EXCAVATION & SHUTTERING", engineer: "ENGR. AHMAD", equipment: "EXCAVATOR", basePercent: 5, step: 3 },
-      "3039A": { activity: "STEEL FIXING & CONCRETING", engineer: "ENGR. SHAMJAS", equipment: "CONCRETE MIXER", basePercent: 8, step: 3 },
-      "3048": { activity: "BLOCK WORK & MASONRY", engineer: "ENGR. YONAS", equipment: "HAND TOOLS", basePercent: 10, step: 3 },
-      "3049": { activity: "PLASTERING", engineer: "ENGR. AHMAD", equipment: "SCAFFOLDING", basePercent: 4, step: 3 },
-      "3053": { activity: "BLOCK WORK", engineer: "ENGR. YONAS", equipment: "CONCRETE MIXER", basePercent: 15, step: 3 },
-      "3054": { activity: "FOUNDATION WORK", engineer: "ENGR. SHAMJAS", equipment: "EXCAVATOR", basePercent: 20, step: 3 },
-      "3056": { activity: "MEP INSTALLATION", engineer: "ENGR. YONAS", equipment: "HAND TOOLS", basePercent: 2, step: 2 },
-      "3057": { activity: "BLOCK WORK", engineer: "ENGR. SHAMJAS", equipment: "CONCRETE", basePercent: 10, step: 3 },
-      "3058": { activity: "WALL MASONRY", engineer: "ENGR. AHMAD", equipment: "HAND TOOLS", basePercent: 15, step: 3 },
-      "3061": { activity: "PAINTING & FINISHING", engineer: "ENGR. SHAMJAS", equipment: "SCAFFOLDING", basePercent: 5, step: 2 },
-    };
-
-    for (const project of projects) {
-      const code = project.code;
-      const config = activitiesByProject[code] || {
-        activity: "GENERAL CONSTRUCTION WORK",
-        engineer: "ENGR. YONAS",
-        equipment: "HAND TOOLS",
-        basePercent: 5,
-        step: 3
-      };
-
-      let currentCumPercent = config.basePercent;
-
-      for (let day = 1; day <= 30; day++) {
-        const dateStr = `2026-06-${day.toString().padStart(2, "0")}`;
-        
-        const dayIncrement = config.step + (day % 3); // realistic daily progress variation
-        currentCumPercent = Math.min(100, currentCumPercent + dayIncrement);
-
-        const recordId = `seed-june-${code}-${dateStr}`;
-        const newRecord = {
-          date: dateStr,
-          project: code,
-          laborsName: "",
-          designation: "",
-          projectLocation: project.location || "DUBAI, UAE",
-          siteEngineer: config.engineer,
-          reassignedTask: "",
-          attendanceStatus: "Present",
-          activityName: config.activity,
-          workCompletedPercent: currentCumPercent.toString(),
-          targetDate: "2026-06-30",
-          workCompletedTodayPercent: dayIncrement.toString(),
-          noOfLaborSubcontractor: (4 + (day % 4)).toString(), 
-          equipment: config.equipment,
-          remarks: currentCumPercent === 100 ? "COMPLETED" : "ON GOING",
-          createdAt: `${dateStr}T09:00:00.000Z`
-        };
-
-        // Write to Firestore
-        try {
-          await setDoc(doc(firestoreDb, "submissions", recordId), newRecord);
-        } catch (dbError) {
-          console.warn(`Failed writing seeded record ${recordId} to Firestore:`, dbError);
+        if (isSeedId || (isJuneDate && !existsLocally)) {
+          toDelete.push(docId);
         }
-        newRecords.push({ id: recordId, ...newRecord });
+      });
+
+      if (toDelete.length > 0) {
+        console.log(`Cleaning up ${toDelete.length} pre-encoded June records from Firestore database...`);
+        for (const id of toDelete) {
+          try {
+            await deleteDoc(doc(firestoreDb, "submissions", id));
+          } catch (dbError) {
+            console.warn(`Failed to delete pre-encoded record ${id} from Firestore:`, dbError);
+          }
+        }
       }
     }
 
-    // Merge into local cache (remove any old seed-june- records first)
-    const filteredOriginals = seededSubmissions.filter((s: any) => !s.id.startsWith("seed-june-"));
-    const finalSubmissions = [...filteredOriginals, ...newRecords];
-    
-    await safeWriteSubmissions(finalSubmissions);
-    console.log(`Successfully seeded ${newRecords.length} progress monitoring records for June 2026 in Firestore and cache.`);
+    // Clean up local entries.json of any seed-june- records
+    let submissions: any[] = [];
+    try {
+      if (existsSync(DATA_FILE)) {
+        const data = await fs.readFile(DATA_FILE, "utf-8");
+        submissions = JSON.parse(data || "[]");
+      }
+    } catch (e) {}
+
+    const remainingSubmissions = submissions.filter((s: any) => {
+      const isSeedId = s.id && s.id.startsWith("seed-june-");
+      return !isSeedId;
+    });
+
+    if (submissions.length !== remainingSubmissions.length) {
+      await safeWriteSubmissions(remainingSubmissions);
+      console.log(`Local backup entries.json cleaned. Remaining records: ${remainingSubmissions.length}`);
+    } else {
+      console.log("No pre-encoded records found in local entries.json.");
+    }
   } catch (error) {
-    console.error("Error in seedJuneProgressMonitoring:", error);
+    console.error("Error in cleanupPreEncodedRecords:", error);
   }
 }
 
 // Setup Vite or production build serving
 async function setupVite() {
-  // Sync separate daily and monthly ledger records on startup
+  // Sync separate daily and monthly ledger records on startup after cleanup
   try {
-    await seedJuneProgressMonitoring();
+    await cleanupPreEncodedRecords();
     await syncSeparateFiles();
   } catch (syncError) {
     console.error("Failed to run initial syncSeparateFiles:", syncError);
