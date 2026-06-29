@@ -1981,7 +1981,7 @@ export default function App() {
   // Dedicated CSV Exporter for Daily Activity & Progress Monitoring Logs
   const downloadMonitoringCSV = (filteredLogs: Submission[]) => {
     const BOM = "\uFEFF";
-    let csvContent = BOM + '"DATE","PROJECT","SITE LOCATION","SITE ENGINEER","ACTIVITY NAME","TARGET DATE","% WORK COMPLETED (CUMULATIVE)","% WORK COMPLETED TODAY","LABORS/SUB-CONTRACTORS","EQUIPMENT"\n';
+    let csvContent = BOM + '"DATE","PROJECT","SITE LOCATION","SITE ENGINEER","ACTIVITY NAME","TARGET DATE","% WORK COMPLETED (CUMULATIVE)","% WORK COMPLETED TODAY","LABORS/SUB-CONTRACTORS","EQUIPMENT","REMARKS","PICTURES"\n';
 
     for (const s of filteredLogs) {
       const row = [
@@ -1994,7 +1994,9 @@ export default function App() {
         s.workCompletedPercent || "",
         s.workCompletedTodayPercent || "",
         s.noOfLaborSubcontractor || "",
-        s.equipment || ""
+        s.equipment || "",
+        s.remarks || "",
+        s.images && s.images.length > 0 ? s.images.join(" | ") : ""
       ].map(val => {
         const clean = (val || "").replace(/"/g, '""');
         return `"${clean}"`;
@@ -2020,7 +2022,7 @@ export default function App() {
     csvContent += `"PROJECT CODE","${projectCode}"\n`;
     csvContent += `"DATE","${date}"\n\n`;
     
-    csvContent += '"S/NO.","NAME OF ACTIVITY","% WORK COMPLETED (CUMULATIVE)","TARGET DATE","WORK COMPLETED TODAY","NO. LABOR / SUBCONTRACTOR","EQUIPMENT","REMARKS"\n';
+    csvContent += '"S/NO.","NAME OF ACTIVITY","% WORK COMPLETED (CUMULATIVE)","TARGET DATE","WORK COMPLETED TODAY","NO. LABOR / SUBCONTRACTOR","EQUIPMENT","REMARKS","PICTURES"\n';
 
     records.forEach((s, idx) => {
       const row = [
@@ -2031,7 +2033,8 @@ export default function App() {
         s.workCompletedTodayPercent ? `+${s.workCompletedTodayPercent}%` : "",
         s.noOfLaborSubcontractor || "",
         s.equipment || "",
-        s.remarks || ""
+        s.remarks || "",
+        s.images && s.images.length > 0 ? s.images.join(" | ") : ""
       ].map(val => {
         const clean = (val || "").replace(/"/g, '""');
         return `"${clean}"`;
@@ -2040,7 +2043,7 @@ export default function App() {
     });
 
     const totalLabors = records.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0) || 0;
-    csvContent += `"","TOTAL ACTIVITIES: ${records.length}","","","","TOTAL LABORS: ${totalLabors}","",""\n`;
+    csvContent += `"","TOTAL ACTIVITIES: ${records.length}","","","","TOTAL LABORS: ${totalLabors}","","",""\n`;
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -2100,7 +2103,8 @@ export default function App() {
         "WORK COMPLETED TODAY",
         "NO. LABOR / SUBCONTRACTOR",
         "EQUIPMENT",
-        "REMARKS"
+        "REMARKS",
+        "PICTURES"
       ];
 
       const tableRows = records.map((s, idx) => [
@@ -2111,7 +2115,8 @@ export default function App() {
         s.workCompletedTodayPercent ? `+${s.workCompletedTodayPercent}%` : "-",
         s.noOfLaborSubcontractor || "-",
         s.equipment || "-",
-        s.remarks || "-"
+        s.remarks || "-",
+        "" // Empty space for drawings!
       ]);
 
       // Append total summary row
@@ -2123,6 +2128,7 @@ export default function App() {
         "",
         "",
         "TOTAL LABORS: " + totalLabors,
+        "",
         "",
         ""
       ]);
@@ -2147,22 +2153,79 @@ export default function App() {
           fillColor: [248, 250, 252] as [number, number, number] // slate-50
         },
         columnStyles: {
-          0: { cellWidth: 15, halign: "center" as const }, // S/No.
-          1: { cellWidth: 65, fontStyle: "bold" as const }, // Activity Name
-          2: { cellWidth: 35, halign: "center" as const }, // Cumulative
-          3: { cellWidth: 25, halign: "center" as const }, // Target Date
-          4: { cellWidth: 30, halign: "center" as const }, // Today
-          5: { cellWidth: 35, halign: "center" as const }, // Labor
-          6: { cellWidth: 35 }, // Equipment
-          7: { cellWidth: 40 }  // Remarks
+          0: { cellWidth: 10, halign: "center" as const }, // S/No.
+          1: { cellWidth: 35, fontStyle: "bold" as const }, // Activity Name
+          2: { cellWidth: 24, halign: "center" as const }, // Cumulative
+          3: { cellWidth: 20, halign: "center" as const }, // Target Date
+          4: { cellWidth: 22, halign: "center" as const }, // Today
+          5: { cellWidth: 24, halign: "center" as const }, // Labor
+          6: { cellWidth: 24 }, // Equipment
+          7: { cellWidth: 28 },  // Remarks
+          8: { cellWidth: 80 }  // Pictures (wide so images are larger and clear!)
         },
         styles: {
           cellPadding: 2.5,
           lineColor: [226, 232, 240] as [number, number, number], // slate-200
           lineWidth: 0.1,
-          font: "Helvetica"
+          font: "Helvetica",
+          valign: "middle" as const,
+          overflow: "linebreak" as const
         },
-        margin: { left: 15, right: 15 }
+        margin: { left: 15, right: 15 },
+        didParseCell: (data: any) => {
+          if (data.column.index === 8 && data.cell.section === "body") {
+            const logEntry = records[data.row.index];
+            if (logEntry?.images && logEntry.images.length > 0) {
+              data.row.height = Math.max(data.row.height, 32); // Force taller row height (32mm) for larger images
+            }
+          }
+        },
+        didDrawCell: (data: any) => {
+          if (data.column.index === 8 && data.cell.section === "body") {
+            const logEntry = records[data.row.index];
+            if (logEntry?.images && logEntry.images.length > 0) {
+              const imgs = logEntry.images.slice(0, 3); // Draw up to 3 images to fit nicely
+              const cellX = data.cell.x;
+              const cellY = data.cell.y;
+              const cellWidth = data.cell.width;
+              const cellHeight = data.cell.height;
+
+              // Size the images larger (e.g. 24mm x 24mm) for high visibility!
+              const imgSize = 24; 
+              const gap = 2;
+              const totalWidth = imgs.length * imgSize + (imgs.length - 1) * gap;
+              
+              // Center the images horizontally within the cell
+              let startX = cellX + (cellWidth - totalWidth) / 2;
+              if (startX < cellX + 1) startX = cellX + 1; // Safeguard padding
+              
+              // Center vertically
+              const startY = cellY + (cellHeight - imgSize) / 2;
+
+              imgs.forEach((imgSrc, imgIdx) => {
+                try {
+                  // Ensure it's a valid string
+                  if (typeof imgSrc === "string" && imgSrc.startsWith("data:image")) {
+                    let format = "JPEG";
+                    if (imgSrc.includes("png")) format = "PNG";
+                    else if (imgSrc.includes("webp")) format = "WEBP";
+                    
+                    doc.addImage(
+                      imgSrc,
+                      format,
+                      startX + imgIdx * (imgSize + gap),
+                      startY,
+                      imgSize,
+                      imgSize
+                    );
+                  }
+                } catch (e) {
+                  console.error("Error rendering image in PDF", e);
+                }
+              });
+            }
+          }
+        }
       };
 
       if (typeof autoTableFn === "function") {
@@ -2400,7 +2463,8 @@ export default function App() {
         "TODAY %",
         "LABORS",
         "EQUIPMENT",
-        "REMARKS"
+        "REMARKS",
+        "PICTURES"
       ];
 
       const tableRows = filteredLogs.map((s) => [
@@ -2413,7 +2477,8 @@ export default function App() {
         s.workCompletedTodayPercent ? `${s.workCompletedTodayPercent}%` : "-",
         s.noOfLaborSubcontractor || "-",
         s.equipment || "-",
-        s.remarks || "-"
+        s.remarks || "-",
+        "" // Leave empty space for drawings!
       ]);
 
       const tableOptions = {
@@ -2436,16 +2501,17 @@ export default function App() {
           fillColor: [248, 250, 252] as [number, number, number] // slate-50
         },
         columnStyles: {
-          0: { cellWidth: 20 }, // Date
-          1: { cellWidth: 25 }, // Project
-          2: { cellWidth: 25 }, // Site Eng
-          3: { cellWidth: 40 }, // Activity
-          4: { cellWidth: 22 }, // Target Date
-          5: { cellWidth: 20 }, // Cumulative %
-          6: { cellWidth: 20 }, // Today %
-          7: { cellWidth: 15 }, // Labors
-          8: { cellWidth: 35 }, // Equipment
-          9: { cellWidth: 45 }  // Remarks
+          0: { cellWidth: 15 }, // Date
+          1: { cellWidth: 18 }, // Project
+          2: { cellWidth: 22 }, // Site Eng
+          3: { cellWidth: 32 }, // Activity
+          4: { cellWidth: 18 }, // Target Date
+          5: { cellWidth: 14 }, // Cumulative %
+          6: { cellWidth: 14 }, // Today %
+          7: { cellWidth: 12 }, // Labors
+          8: { cellWidth: 22 }, // Equipment
+          9: { cellWidth: 28 }, // Remarks
+          10: { cellWidth: 82 } // Pictures (wide so images are larger!)
         },
         styles: {
           cellPadding: 2.5,
@@ -2454,6 +2520,61 @@ export default function App() {
           font: "Helvetica",
           valign: "middle" as const,
           overflow: "linebreak" as const
+        },
+        margin: { left: 10, right: 10 },
+        didParseCell: (data: any) => {
+          if (data.column.index === 10 && data.cell.section === "body") {
+            const logEntry = filteredLogs[data.row.index];
+            if (logEntry?.images && logEntry.images.length > 0) {
+              data.row.height = Math.max(data.row.height, 32); // Force taller row height (32mm) for larger images
+            }
+          }
+        },
+        didDrawCell: (data: any) => {
+          if (data.column.index === 10 && data.cell.section === "body") {
+            const logEntry = filteredLogs[data.row.index];
+            if (logEntry?.images && logEntry.images.length > 0) {
+              const imgs = logEntry.images.slice(0, 3); // Draw up to 3 images to fit nicely
+              const cellX = data.cell.x;
+              const cellY = data.cell.y;
+              const cellWidth = data.cell.width;
+              const cellHeight = data.cell.height;
+
+              // Size the images larger (e.g. 24mm x 24mm) for high visibility!
+              const imgSize = 24; 
+              const gap = 2;
+              const totalWidth = imgs.length * imgSize + (imgs.length - 1) * gap;
+              
+              // Center the images horizontally within the cell
+              let startX = cellX + (cellWidth - totalWidth) / 2;
+              if (startX < cellX + 1) startX = cellX + 1; // Safeguard padding
+              
+              // Center vertically
+              const startY = cellY + (cellHeight - imgSize) / 2;
+
+              imgs.forEach((imgSrc, imgIdx) => {
+                try {
+                  // Ensure it's a valid string
+                  if (typeof imgSrc === "string" && imgSrc.startsWith("data:image")) {
+                    let format = "JPEG";
+                    if (imgSrc.includes("png")) format = "PNG";
+                    else if (imgSrc.includes("webp")) format = "WEBP";
+                    
+                    doc.addImage(
+                      imgSrc,
+                      format,
+                      startX + imgIdx * (imgSize + gap),
+                      startY,
+                      imgSize,
+                      imgSize
+                    );
+                  }
+                } catch (e) {
+                  console.error("Error rendering image in PDF", e);
+                }
+              });
+            }
+          }
         }
       };
 
