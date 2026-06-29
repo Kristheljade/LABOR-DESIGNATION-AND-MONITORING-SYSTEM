@@ -13,7 +13,7 @@ import {
   getDoc,
   setDoc, 
   deleteDoc
-} from "firebase/firestore/lite";
+} from "firebase/firestore";
 
 dotenv.config();
 
