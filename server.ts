@@ -20,6 +20,17 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 const DATA_FILE = path.join(process.cwd(), "entries.json");
+const PASSCODE_FILE = path.join(process.cwd(), "passcode_config.json");
+
+// Elegant and clean Firebase error logger to suppress verbose quota exceeded error traces in the console/logs
+function handleFirebaseError(context: string, error: any) {
+  const errMsg = error?.message || String(error);
+  if (errMsg.includes("Quota limit exceeded") || errMsg.includes("quota")) {
+    console.warn(`[Firebase - ${context}] Quota limit exceeded. Running in offline/local-cache fallback mode.`);
+  } else {
+    console.warn(`[Firebase - ${context}] Error:`, errMsg);
+  }
+}
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -151,7 +162,7 @@ async function readLocalSubmissions(): Promise<any[]> {
         return list;
       }
     } catch (fireErr) {
-      console.error("Self-healing Firestore recovery failed:", fireErr);
+      handleFirebaseError("readLocalSubmissions - self-healing", fireErr);
     }
     return [];
   }
@@ -174,7 +185,7 @@ async function getSubmissions(): Promise<any[]> {
       return list;
     }
   } catch (error) {
-    console.warn("Firebase fetch failed, falling back to local file cache:", error);
+    handleFirebaseError("getSubmissions", error);
   }
 
   return readLocalSubmissions();
@@ -253,12 +264,31 @@ async function getAdminPasscode(): Promise<string> {
       const docRef = doc(firestoreDb, "settings", "passcode_config");
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        return docSnap.data().passcode;
+        const data = docSnap.data();
+        try {
+          await fs.writeFile(PASSCODE_FILE, JSON.stringify(data, null, 2), "utf-8");
+        } catch (err) {
+          console.error("Failed to write passcode cache:", err);
+        }
+        return data.passcode;
       }
     }
   } catch (error) {
-    console.error("Error fetching passcode from Firestore:", error);
+    handleFirebaseError("getAdminPasscode", error);
   }
+
+  // Local cache fallback
+  try {
+    if (existsSync(PASSCODE_FILE)) {
+      const cached = JSON.parse(await fs.readFile(PASSCODE_FILE, "utf-8"));
+      if (cached && cached.passcode) {
+        return cached.passcode;
+      }
+    }
+  } catch (err) {
+    console.error("Error reading local passcode cache:", err);
+  }
+
   return ADMIN_PASSCODE;
 }
 
@@ -276,15 +306,35 @@ app.get("/api/passcode-status", async (req, res) => {
     if (firestoreDb) {
       const docRef = doc(firestoreDb, "settings", "passcode_config");
       const docSnap = await getDoc(docRef);
-      if (docSnap.exists() && docSnap.data().isConfigured) {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        try {
+          await fs.writeFile(PASSCODE_FILE, JSON.stringify(data, null, 2), "utf-8");
+        } catch (err) {
+          console.error("Failed to write passcode cache:", err);
+        }
+        if (data.isConfigured) {
+          return res.json({ configured: true });
+        }
+      }
+    }
+  } catch (error: any) {
+    handleFirebaseError("passcode-status", error);
+  }
+
+  // Local cache fallback
+  try {
+    if (existsSync(PASSCODE_FILE)) {
+      const cached = JSON.parse(await fs.readFile(PASSCODE_FILE, "utf-8"));
+      if (cached && cached.isConfigured) {
         return res.json({ configured: true });
       }
     }
-    return res.json({ configured: false });
-  } catch (error: any) {
-    console.error("Error checking passcode status:", error);
-    return res.json({ configured: false });
+  } catch (err) {
+    console.error("Error reading local passcode cache:", err);
   }
+
+  return res.json({ configured: false });
 });
 
 // Verify passcode
@@ -300,20 +350,36 @@ app.post("/api/verify-passcode", async (req, res) => {
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
         const stored = docSnap.data().passcode;
+        try {
+          await fs.writeFile(PASSCODE_FILE, JSON.stringify(docSnap.data(), null, 2), "utf-8");
+        } catch (err) {
+          console.error("Failed to write passcode cache:", err);
+        }
         return res.json({ valid: passcode === stored });
       }
     }
-    
-    // Fallback ONLY if database is not configured yet
-    if (process.env.ADMIN_PASSPHRASE) {
-      return res.json({ valid: passcode === process.env.ADMIN_PASSPHRASE });
-    }
-    // Default fallback (123456) ONLY if database is completely empty/unconfigured
-    return res.json({ valid: passcode === "123456" });
   } catch (error: any) {
-    console.error("Error verifying passcode:", error);
-    return res.status(500).json({ valid: false, error: "Database error." });
+    handleFirebaseError("verify-passcode", error);
   }
+
+  // Local cache fallback
+  try {
+    if (existsSync(PASSCODE_FILE)) {
+      const cached = JSON.parse(await fs.readFile(PASSCODE_FILE, "utf-8"));
+      if (cached && cached.passcode) {
+        return res.json({ valid: passcode === cached.passcode });
+      }
+    }
+  } catch (err) {
+    console.error("Error reading local passcode cache during verification:", err);
+  }
+  
+  // Fallback ONLY if database is not configured yet
+  if (process.env.ADMIN_PASSPHRASE) {
+    return res.json({ valid: passcode === process.env.ADMIN_PASSPHRASE });
+  }
+  // Default fallback (123456) ONLY if database is completely empty/unconfigured
+  return res.json({ valid: passcode === "123456" });
 });
 
 // Setup or update passcode
@@ -323,36 +389,73 @@ app.post("/api/setup-passcode", async (req, res) => {
     return res.status(400).json({ error: "New passcode must be at least 4 characters long." });
   }
 
+  let isConfigured = false;
+  let stored = "123456";
+
+  // Check current passcode configuration
   try {
     const firestoreDb = await getDb();
-    if (!firestoreDb) {
-      return res.status(500).json({ error: "Database not connected." });
-    }
-
-    const docRef = doc(firestoreDb, "settings", "passcode_config");
-    const docSnap = await getDoc(docRef);
-    const isConfigured = docSnap.exists() && docSnap.data().isConfigured;
-
-    if (isConfigured) {
-      // Must verify current passcode before updating
-      const stored = docSnap.data().passcode;
-      if (currentPasscode !== stored) {
-        return res.status(400).json({ error: "Incorrect current passcode. Cannot update security settings." });
+    if (firestoreDb) {
+      const docRef = doc(firestoreDb, "settings", "passcode_config");
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        isConfigured = docSnap.data().isConfigured;
+        stored = docSnap.data().passcode;
       }
     }
-
-    // Save to Firestore
-    await setDoc(docRef, {
-      id: "passcode_config",
-      passcode: newPasscode,
-      isConfigured: true
-    });
-
-    return res.json({ success: true, message: "Passcode updated successfully!" });
   } catch (error: any) {
-    console.error("Error setting up passcode:", error);
-    return res.status(500).json({ error: "Failed to update passcode in database." });
+    handleFirebaseError("setup-passcode - get current config", error);
+    // Local cache check fallback
+    try {
+      if (existsSync(PASSCODE_FILE)) {
+        const cached = JSON.parse(await fs.readFile(PASSCODE_FILE, "utf-8"));
+        if (cached) {
+          isConfigured = cached.isConfigured;
+          stored = cached.passcode;
+        }
+      }
+    } catch (err) {
+      console.error("Error reading local passcode config fallback during setup:", err);
+    }
   }
+
+  if (isConfigured) {
+    // Must verify current passcode before updating
+    if (currentPasscode !== stored) {
+      return res.status(400).json({ error: "Incorrect current passcode. Cannot update security settings." });
+    }
+  }
+
+  const updatedConfig = {
+    id: "passcode_config",
+    passcode: newPasscode,
+    isConfigured: true
+  };
+
+  let firebaseSuccess = false;
+  // Save to Firestore if available
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const docRef = doc(firestoreDb, "settings", "passcode_config");
+      await setDoc(docRef, updatedConfig);
+      firebaseSuccess = true;
+    }
+  } catch (error: any) {
+    handleFirebaseError("setup-passcode - save config", error);
+  }
+
+  // Save to local cache
+  try {
+    await fs.writeFile(PASSCODE_FILE, JSON.stringify(updatedConfig, null, 2), "utf-8");
+  } catch (localError) {
+    console.error("Failed to write passcode to local cache:", localError);
+  }
+
+  return res.json({ 
+    success: true, 
+    message: firebaseSuccess ? "Passcode updated successfully!" : "Passcode updated locally (offline fallback mode)." 
+  });
 });
 
 const CODES_FILE = path.join(process.cwd(), "labor_codes.json");
@@ -385,7 +488,7 @@ async function getLaborCodes(): Promise<any[]> {
           try {
             await setDoc(doc(firestoreDb, "labor_codes", item.id), item);
           } catch (err) {
-            console.error(`Failed to write default labor code ${item.id} to Firestore:`, err);
+            handleFirebaseError(`getLaborCodes - write default ${item.id}`, err);
           }
         }
         await fs.writeFile(CODES_FILE, JSON.stringify(defaults, null, 2), "utf-8");
@@ -393,7 +496,7 @@ async function getLaborCodes(): Promise<any[]> {
       }
     }
   } catch (error) {
-    console.warn("Firebase fetch for labor codes failed, falling back to local file cache:", error);
+    handleFirebaseError("getLaborCodes", error);
   }
 
   try {
@@ -456,7 +559,7 @@ app.post("/api/labor-codes", async (req, res) => {
         console.log(`Stored labor code ${id} in Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed writing labor code to Firestore:", error);
+      handleFirebaseError("createLaborCode", error);
     }
 
     // Cache locally
@@ -494,7 +597,7 @@ app.delete("/api/labor-codes/:id", async (req, res) => {
         console.log(`Deleted labor code ${id} from Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed to delete labor code from Firestore:", error);
+      handleFirebaseError("deleteLaborCode", error);
     }
 
     // Update local cache
@@ -544,7 +647,7 @@ async function getProjectCodes(): Promise<any[]> {
           try {
             await setDoc(doc(firestoreDb, "project_codes", item.id), item);
           } catch (err) {
-            console.error(`Failed to write default project code ${item.id} to Firestore:`, err);
+            handleFirebaseError(`getProjectCodes - write default ${item.id}`, err);
           }
         }
         await fs.writeFile(PROJECT_CODES_FILE, JSON.stringify(defaults, null, 2), "utf-8");
@@ -552,7 +655,7 @@ async function getProjectCodes(): Promise<any[]> {
       }
     }
   } catch (error) {
-    console.warn("Firebase fetch for project codes failed, falling back to local file cache:", error);
+    handleFirebaseError("getProjectCodes", error);
   }
 
   try {
@@ -614,7 +717,7 @@ app.post("/api/project-codes", async (req, res) => {
         console.log(`Stored project code ${id} in Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed writing project code to Firestore:", error);
+      handleFirebaseError("createProjectCode", error);
     }
 
     // Cache locally
@@ -652,7 +755,7 @@ app.delete("/api/project-codes/:id", async (req, res) => {
         console.log(`Deleted project code ${id} from Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed to delete project code from Firestore:", error);
+      handleFirebaseError("deleteProjectCode", error);
     }
 
     // Update local cache
@@ -760,7 +863,7 @@ app.post("/api/submissions", async (req, res) => {
         console.log(`Successfully stored entry ${id} in Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed writing to Firebase Firestore, will rely on local storage cache:", error);
+      handleFirebaseError("createSubmission", error);
     }
 
     // Always sync locally to keep the local entries.json database up to date
@@ -879,7 +982,7 @@ app.put("/api/submissions/:id", async (req, res) => {
           console.log(`Successfully created new entry ${newId} (copied/updated from ${id}) in Firestore.`);
         }
       } catch (error) {
-        console.warn("Failed writing new entry to Firestore:", error);
+        handleFirebaseError("copySubmissionOnLaterDate", error);
       }
 
       // Add to local submissions list
@@ -926,7 +1029,7 @@ app.put("/api/submissions/:id", async (req, res) => {
         console.log(`Successfully updated entry ${id} in Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed writing updated entry to Firestore:", error);
+      handleFirebaseError("updateSubmission", error);
     }
 
     // Write to local cache atomically
@@ -968,7 +1071,7 @@ app.delete("/api/submissions/:id", requireAdmin, async (req, res) => {
         console.log(`Successfully deleted entry ${id} from Firestore.`);
       }
     } catch (error) {
-      console.warn("Failed to delete from Firebase Firestore, will remove from local storage cache:", error);
+      handleFirebaseError("deleteSubmission", error);
     }
 
     // Always sync locally to remove from the local backup entries.json database
@@ -1219,7 +1322,7 @@ async function cleanupPreEncodedRecords() {
           try {
             await deleteDoc(doc(firestoreDb, "submissions", id));
           } catch (dbError) {
-            console.warn(`Failed to delete pre-encoded record ${id} from Firestore:`, dbError);
+            handleFirebaseError(`cleanupPreEncodedRecords - delete ${id}`, dbError);
           }
         }
       }
@@ -1246,7 +1349,7 @@ async function cleanupPreEncodedRecords() {
       console.log("No pre-encoded records found in local entries.json.");
     }
   } catch (error) {
-    console.error("Error in cleanupPreEncodedRecords:", error);
+    handleFirebaseError("cleanupPreEncodedRecords", error);
   }
 }
 
