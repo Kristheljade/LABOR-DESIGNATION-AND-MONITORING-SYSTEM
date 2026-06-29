@@ -610,6 +610,7 @@ export default function App() {
   const [engineerSearchQuery, setEngineerSearchQuery] = useState("");
   const [editingEngineerRecordId, setEditingEngineerRecordId] = useState<string | null>(null);
   const [engineerPortalActiveProject, setEngineerPortalActiveProject] = useState<string>("ALL");
+  const [engineerPortalMobileView, setEngineerPortalMobileView] = useState<"projects" | "logs">("projects");
   const [isAddingActivity, setIsAddingActivity] = useState<boolean>(false);
   const [addActivityError, setAddActivityError] = useState<string>("");
   const [isAddingActivitySubmitting, setIsAddingActivitySubmitting] = useState<boolean>(false);
@@ -3178,6 +3179,7 @@ export default function App() {
                         setIsEngineerPortalOpen(true);
                         setEditingEngineerRecordId(null); // Reset any current edits
                         setEngineerPortalActiveProject("ALL"); // Reset project filter
+                        setEngineerPortalMobileView("projects"); // Reset mobile view to project list
                       }}
                       className="self-start sm:self-center inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-sm hover:shadow-indigo-100 cursor-pointer"
                     >
@@ -6111,7 +6113,9 @@ export default function App() {
               return (
                 <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-slate-50/50">
                   {/* Left Sidebar - Projects list */}
-                  <div className="w-full md:w-72 border-b md:border-b-0 md:border-r border-slate-200 bg-white flex flex-col shrink-0 overflow-y-auto">
+                  <div className={`w-full md:w-72 border-b md:border-b-0 md:border-r border-slate-200 bg-white flex flex-col shrink-0 overflow-y-auto ${
+                    engineerPortalMobileView === "logs" ? "hidden md:flex" : "flex"
+                  }`}>
                     <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
                       <span className="text-[11px] font-mono font-bold text-indigo-950 uppercase tracking-widest flex items-center gap-1.5">
                         <Briefcase className="h-4 w-4 text-indigo-600" /> Site Projects
@@ -6135,6 +6139,7 @@ export default function App() {
                           }));
                           setAddActivityError("");
                           setIsAddingActivity(false);
+                          setEngineerPortalMobileView("logs");
                         }}
                         className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer ${
                           engineerPortalActiveProject === "ALL"
@@ -6180,6 +6185,7 @@ export default function App() {
                                 projectLocation: pLocation
                               }));
                               setAddActivityError("");
+                              setEngineerPortalMobileView("logs");
                             }}
                             className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-1 cursor-pointer ${
                               isSelected
@@ -6233,6 +6239,7 @@ export default function App() {
                                   });
                                   setAddActivityError("");
                                   setIsAddingActivity(true);
+                                  setEngineerPortalMobileView("logs");
                                 }}
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-md shadow-xs transition-colors cursor-pointer ${
                                   isSelected 
@@ -6250,7 +6257,20 @@ export default function App() {
                   </div>
 
                   {/* Right Panel - Log details & table */}
-                  <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 flex flex-col">
+                  <div className={`flex-1 overflow-y-auto p-4 md:p-6 space-y-4 flex flex-col ${
+                    engineerPortalMobileView === "projects" ? "hidden md:flex" : "flex"
+                  }`}>
+                    {/* Mobile Back Button */}
+                    <div className="md:hidden flex items-center mb-1">
+                      <button
+                        type="button"
+                        onClick={() => setEngineerPortalMobileView("projects")}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-wider text-indigo-650 bg-indigo-50 hover:bg-indigo-100/80 rounded-xl transition-all cursor-pointer shadow-2xs"
+                      >
+                        <ChevronLeft className="h-4 w-4" /> Back to Site Projects
+                      </button>
+                    </div>
+
                     {/* Selected Project Header */}
                     <div className="bg-white border border-slate-200/80 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs shrink-0">
                       <div className="space-y-1">
@@ -6617,8 +6637,10 @@ export default function App() {
                         </p>
                       </div>
                     ) : (
-                      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col flex-1">
-                        <div className="overflow-x-auto">
+                      <>
+                        {/* Desktop Table View */}
+                        <div className="hidden md:flex bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex-col flex-1">
+                          <div className="overflow-x-auto">
                           <table className="w-full text-left border-collapse min-w-[1200px]">
                             <thead className="bg-[#1e1b4b] text-white sticky top-0 z-10 text-[10px] uppercase font-mono tracking-wider border-b border-indigo-950">
                               <tr>
@@ -6952,7 +6974,322 @@ export default function App() {
                           </table>
                         </div>
                       </div>
-                    )}
+
+                      {/* Mobile Card-Based List View */}
+                      <div className="block md:hidden space-y-4">
+                        {filteredLogs.map((log, idx) => {
+                          const isEditing = editingEngineerRecordId === log.id;
+                          const cumVal = parseFloat(isEditing ? editEngineerForm.workCompletedPercent : (log.workCompletedPercent || "0"));
+                          const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+
+                          return (
+                            <div 
+                              key={log.id} 
+                              className={`bg-white border rounded-2xl p-4 shadow-sm space-y-3 transition-all ${
+                                isEditing ? "border-indigo-500 ring-2 ring-indigo-500/10" : "border-slate-200"
+                              }`}
+                            >
+                              {/* Header: S/No and Project Info */}
+                              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-mono font-bold text-slate-400">#{idx + 1}</span>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={editEngineerForm.project}
+                                      onChange={(e) => setEditEngineerForm(prev => ({ ...prev, project: e.target.value }))}
+                                      className="w-24 bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-bold uppercase text-slate-805 font-mono focus:outline-none focus:border-indigo-500"
+                                      placeholder="Proj Code"
+                                    />
+                                  ) : (
+                                    <span className="text-[10px] font-mono font-bold bg-indigo-50 text-indigo-800 px-2 py-0.5 rounded-lg border border-indigo-100 uppercase">
+                                      {log.project || "N/A"}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-[11px] font-mono text-slate-500">
+                                  {isEditing ? (
+                                    <input
+                                      type="date"
+                                      value={editEngineerForm.date}
+                                      onChange={(e) => setEditEngineerForm(prev => ({ ...prev, date: e.target.value }))}
+                                      className="bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-[11px] font-semibold text-slate-800 font-mono focus:outline-none"
+                                    />
+                                  ) : (
+                                    log.date
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Activity Name */}
+                              <div>
+                                <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">Name of Activity</span>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={editEngineerForm.activityName}
+                                    onChange={(e) => setEditEngineerForm(prev => ({ ...prev, activityName: e.target.value }))}
+                                    className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold uppercase text-slate-800 focus:outline-none focus:border-indigo-500"
+                                    placeholder="Activity Name"
+                                  />
+                                ) : (
+                                  <h5 className="text-xs font-bold text-slate-800 uppercase tracking-tight">{log.activityName || "-"}</h5>
+                                )}
+                              </div>
+
+                              {/* Site Location (only visible/editable) */}
+                              <div>
+                                <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">Location</span>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={editEngineerForm.projectLocation}
+                                    onChange={(e) => setEditEngineerForm(prev => ({ ...prev, projectLocation: e.target.value }))}
+                                    className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs uppercase text-slate-600 focus:outline-none focus:border-indigo-500"
+                                    placeholder="Location"
+                                  />
+                                ) : (
+                                  <p className="text-[11px] text-slate-600 uppercase font-medium">{log.projectLocation || "N/A"}</p>
+                                )}
+                              </div>
+
+                              {/* Grid containing other details */}
+                              <div className="grid grid-cols-2 gap-3 pt-1">
+                                {/* % Work Completed */}
+                                <div className="col-span-2 bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-1">% Work Completed</span>
+                                  {isEditing ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="text"
+                                        value={editEngineerForm.workCompletedPercent}
+                                        onChange={(e) => setEditEngineerForm(prev => ({ ...prev, workCompletedPercent: e.target.value }))}
+                                        className="w-16 bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-800 text-center font-mono focus:outline-none focus:border-indigo-500"
+                                        placeholder="e.g. 45"
+                                      />
+                                      <span className="text-xs font-bold font-mono text-slate-500">%</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <div className="flex-1 bg-slate-200/80 rounded-full h-1.5 overflow-hidden">
+                                        <div 
+                                          className={`h-full rounded-full ${cleanCum === 100 ? "bg-emerald-500" : cleanCum > 50 ? "bg-amber-500" : "bg-indigo-500"}`}
+                                          style={{ width: `${cleanCum}%` }}
+                                        ></div>
+                                      </div>
+                                      <span className="font-bold font-mono text-xs text-slate-800">{log.workCompletedPercent || "0"}%</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Target Date */}
+                                <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">Target Date</span>
+                                  {isEditing ? (
+                                    <input
+                                      type="date"
+                                      value={editEngineerForm.targetDate}
+                                      onChange={(e) => setEditEngineerForm(prev => ({ ...prev, targetDate: e.target.value }))}
+                                      className="w-full bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-semibold text-slate-800 font-mono focus:outline-none"
+                                    />
+                                  ) : (
+                                    <span className="text-xs font-bold text-slate-700 font-mono">{log.targetDate || "-"}</span>
+                                  )}
+                                </div>
+
+                                {/* Work Completed Today */}
+                                <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">Completed Today</span>
+                                  {isEditing ? (
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-xs font-bold text-slate-400 font-mono">+</span>
+                                      <input
+                                        type="text"
+                                        value={editEngineerForm.workCompletedTodayPercent}
+                                        onChange={(e) => setEditEngineerForm(prev => ({ ...prev, workCompletedTodayPercent: e.target.value }))}
+                                        className="w-14 bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-800 text-center font-mono focus:outline-none"
+                                        placeholder="0"
+                                      />
+                                      <span className="text-xs font-bold text-slate-500 font-mono">%</span>
+                                    </div>
+                                  ) : (
+                                    log.workCompletedTodayPercent ? (
+                                      <span className="inline-block bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-lg font-bold font-mono text-[11px]">
+                                        +{log.workCompletedTodayPercent}%
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-400 font-mono text-xs">-</span>
+                                    )
+                                  )}
+                                </div>
+
+                                {/* No. of Labor */}
+                                <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">No. Labor</span>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={editEngineerForm.noOfLaborSubcontractor}
+                                      onChange={(e) => setEditEngineerForm(prev => ({ ...prev, noOfLaborSubcontractor: e.target.value }))}
+                                      className="w-full bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-800 text-center font-mono focus:outline-none"
+                                      placeholder="0"
+                                    />
+                                  ) : (
+                                    <span className="text-xs font-bold text-slate-800 font-mono">{log.noOfLaborSubcontractor || "-"}</span>
+                                  )}
+                                </div>
+
+                                {/* Equipment used */}
+                                <div className="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">Equipment</span>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={editEngineerForm.equipment}
+                                      onChange={(e) => setEditEngineerForm(prev => ({ ...prev, equipment: e.target.value }))}
+                                      className="w-full bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-xs uppercase font-semibold text-slate-850 focus:outline-none"
+                                      placeholder="Equipment"
+                                    />
+                                  ) : (
+                                    <span className="text-xs font-bold text-slate-700 uppercase block truncate">{log.equipment || "-"}</span>
+                                  )}
+                                </div>
+
+                                {/* Remarks */}
+                                <div className="col-span-2 bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider mb-0.5">Remarks</span>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={editEngineerForm.remarks}
+                                      onChange={(e) => setEditEngineerForm(prev => ({ ...prev, remarks: e.target.value }))}
+                                      className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs uppercase font-semibold text-slate-850 focus:outline-none"
+                                      placeholder="Remarks"
+                                    />
+                                  ) : (
+                                    <span className="text-xs font-bold text-slate-700 uppercase block">{log.remarks || "-"}</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Pictures Section */}
+                              <div className="bg-slate-50/50 p-3 rounded-2xl border border-slate-100 space-y-2">
+                                <span className="text-[9px] font-mono font-bold text-slate-400 uppercase block tracking-wider">Activity Pictures</span>
+                                {isEditing ? (
+                                  <div className="space-y-2">
+                                    <div className="flex flex-wrap gap-2">
+                                      {(editEngineerForm.images || []).map((img, idx) => (
+                                        <div key={idx} className="relative w-12 h-12 rounded-lg border border-slate-200 overflow-hidden shrink-0 shadow-2xs">
+                                          <img 
+                                            src={img} 
+                                            className="w-full h-full object-cover cursor-pointer" 
+                                            onClick={() => setLightbox({ isOpen: true, images: editEngineerForm.images || [], activeIndex: idx, title: "Edit Activity Photo" })} 
+                                            referrerPolicy="no-referrer" 
+                                          />
+                                          <button 
+                                            type="button" 
+                                            onClick={() => setEditEngineerForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== idx) }))} 
+                                            className="absolute top-0.5 right-0.5 bg-rose-600 rounded-full text-white p-0.5 hover:bg-rose-700 cursor-pointer shadow-sm z-10"
+                                          >
+                                            <X className="h-2 w-2" />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <label className="relative inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-[10px] font-bold text-indigo-700 rounded-xl cursor-pointer border border-indigo-100 uppercase tracking-wider shadow-2xs">
+                                      <Plus className="h-3 w-3" /> Upload Picture
+                                      <input 
+                                        type="file" 
+                                        multiple 
+                                        accept="image/*" 
+                                        onChange={async (e) => {
+                                          const files = e.target.files;
+                                          if (files) {
+                                            const promises = Array.from(files).map((f: any) => compressImage(f));
+                                            try {
+                                              const resImgs = await Promise.all(promises);
+                                              setEditEngineerForm(prev => ({ ...prev, images: [...(prev.images || []), ...resImgs] }));
+                                            } catch (err) { 
+                                              console.error(err); 
+                                            }
+                                          }
+                                        }} 
+                                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+                                      />
+                                    </label>
+                                  </div>
+                                ) : (
+                                  log.images && log.images.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {log.images.map((img, imgIdx) => (
+                                        <div key={imgIdx} className="w-12 h-12 rounded-lg border border-slate-200 overflow-hidden shadow-2xs hover:scale-105 transition-transform shrink-0">
+                                          <img
+                                            src={img}
+                                            alt="Log Photo"
+                                            className="w-full h-full object-cover cursor-pointer"
+                                            onClick={() => setLightbox({ isOpen: true, images: log.images || [], activeIndex: imgIdx, title: `${log.activityName || "Activity"} Photo` })}
+                                            referrerPolicy="no-referrer"
+                                          />
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 font-mono text-[10px] block">-</span>
+                                  )
+                                )}
+                              </div>
+
+                              {/* Card Actions */}
+                              <div className="border-t border-slate-100 pt-3 flex items-center justify-end gap-2">
+                                {isEditing ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveEngineerRecord(log.id)}
+                                      className="inline-flex items-center gap-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-colors w-full justify-center"
+                                    >
+                                      <Check className="h-3.5 w-3.5" /> Save Card
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingEngineerRecordId(null)}
+                                      className="inline-flex items-center gap-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors w-full justify-center"
+                                    >
+                                      <X className="h-3.5 w-3.5" /> Cancel
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingEngineerRecordId(log.id);
+                                      setEditEngineerForm({
+                                        activityName: log.activityName || "",
+                                        workCompletedPercent: log.workCompletedPercent || "",
+                                        targetDate: log.targetDate || "",
+                                        workCompletedTodayPercent: log.workCompletedTodayPercent || "",
+                                        noOfLaborSubcontractor: log.noOfLaborSubcontractor || "",
+                                        equipment: log.equipment || "",
+                                        remarks: log.remarks || "",
+                                        project: log.project || "",
+                                        date: log.date || "",
+                                        projectLocation: log.projectLocation || "",
+                                        images: log.images || []
+                                      });
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-indigo-650 bg-indigo-50 hover:bg-indigo-100 text-center w-full justify-center border border-indigo-100/60 rounded-xl cursor-pointer transition-colors"
+                                  >
+                                    <Edit className="h-3.5 w-3.5" /> Edit Record Details
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                   </div>
                 </div>
               );
