@@ -168,6 +168,40 @@
         "passcode",
         "isConfigured"
       ]
+    },
+    "pull_out_monitoring_record": {
+      "title": "PullOutMonitoringRecord",
+      "description": "An attendance verification and log sheet for relocated labor at a destination site.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the pull-out monitoring sheet."
+        },
+        "date": {
+          "type": "string",
+          "description": "The date of the labor relocation."
+        },
+        "site": {
+          "type": "string",
+          "description": "The destination project site name."
+        },
+        "workers": {
+          "type": "string",
+          "description": "Serialized list of workers, their attendance status, and verified hours."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "The timestamp when this sheet was verified and saved."
+        }
+      },
+      "required": [
+        "id",
+        "date",
+        "site",
+        "workers",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -186,6 +220,10 @@
     "/settings/{id}": {
       "schema": "setting",
       "description": "A collection of application settings including security and credentials."
+    },
+    "/pull_out_monitoring/{id}": {
+      "schema": "pull_out_monitoring_record",
+      "description": "Verified relocation attendance and timing records for specific sites and dates."
     }
   }
 }

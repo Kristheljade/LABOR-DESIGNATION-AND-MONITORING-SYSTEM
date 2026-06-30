@@ -455,12 +455,49 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
 
 export default function App() {
   // Navigation & authentication state
-  const [currentView, setCurrentView] = useState<"form" | "admin">("form");
+  const [currentView, setCurrentView] = useState<"form" | "admin" | "pullout">("form");
   const [adminTab, setAdminTab] = useState<"ledger" | "monitoring" | "labor_codes" | "security">("ledger");
   const [passcode, setPasscode] = useState<string>("");
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>("");
   const [checkingAuth, setCheckingAuth] = useState<boolean>(false);
+
+  // Pull-Out Portal States
+  const [pullOutMonitoringRecords, setPullOutMonitoringRecords] = useState<any[]>([]);
+  const [isLoadingPullOutMonitoring, setIsLoadingPullOutMonitoring] = useState<boolean>(false);
+  const [selectedPullOutDate, setSelectedPullOutDate] = useState<string>(() => {
+    try {
+      return new Date().toLocaleDateString("en-CA");
+    } catch {
+      return new Date().toISOString().split("T")[0];
+    }
+  });
+  const [selectedPullOutSite, setSelectedPullOutSite] = useState<string>("");
+  const [pullOutWorkerStatus, setPullOutWorkerStatus] = useState<Record<string, {
+    status: "Present" | "Not Present";
+    timeIn: string;
+    timeOut: string;
+  }>>({});
+  const [isSavingPullOutRecord, setIsSavingPullOutRecord] = useState<boolean>(false);
+  const [pullOutSaveSuccess, setPullOutSaveSuccess] = useState<boolean>(false);
+  const [pullOutSaveError, setPullOutSaveError] = useState<string>("");
+
+  // Pull-Out Reporting States
+  const [reportSelectedSite, setReportSelectedSite] = useState<string>("");
+  const [reportSelectedMonth, setReportSelectedMonth] = useState<string>(() => {
+    try {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    } catch {
+      return "2026-06";
+    }
+  });
+  const [activeReportSubTab, setActiveReportSubTab] = useState<"daily" | "monthly">("daily");
+  const [activePullOutSection, setActivePullOutSection] = useState<"verification" | "reports">("verification");
+  const [reportSearchQuery, setReportSearchQuery] = useState<string>("");
+  const [reportGroupBy, setReportGroupBy] = useState<"site" | "project">("site");
+  const [selectedReportLaborNames, setSelectedReportLaborNames] = useState<string[]>([]);
+  const [selectedReportDates, setSelectedReportDates] = useState<string[]>([]);
 
   // Passcode setup/change states
   const [isPasscodeConfigured, setIsPasscodeConfigured] = useState<boolean | null>(null);
@@ -500,6 +537,15 @@ export default function App() {
     noOfLaborSubcontractor: "",
     equipment: "",
     remarks: "",
+    isPullOut: false,
+    absentReason: "",
+    absentReasonOther: "",
+    underTimeTime: "",
+    underTimeReason: "",
+    underTimeReasonOther: "",
+    pullOutTime: "",
+    pullOutSite: "",
+    pullOutReason: "",
   });
 
   // Submission UX state
@@ -796,20 +842,74 @@ export default function App() {
     fetchProjectCodes();
   }, []);
 
-  // Fetch admin logs whenever admin view is active or authenticated, with real-time short polling updates
+  // Fetch logs and pull-out records with short polling
   useEffect(() => {
-    if (isAuthenticated || currentView === "admin") {
+    fetchSubmissions();
+    fetchLaborCodes();
+    fetchProjectCodes();
+    fetchPullOutMonitoring();
+
+    const interval = setInterval(() => {
       fetchSubmissions();
-      fetchLaborCodes();
-      fetchProjectCodes();
+      if (currentView === "pullout" || currentView === "admin") {
+        fetchPullOutMonitoring();
+      }
+    }, 8000); // Poll every 8 seconds for real-time updates
 
-      const interval = setInterval(() => {
-        fetchSubmissions();
-      }, 8000); // Poll every 8 seconds for real-time updates
-
-      return () => clearInterval(interval);
-    }
+    return () => clearInterval(interval);
   }, [isAuthenticated, currentView]);
+
+  // Clear monitoring report selections when tab, site, or month shifts
+  useEffect(() => {
+    setSelectedReportLaborNames([]);
+    setSelectedReportDates([]);
+  }, [reportSelectedSite, activeReportSubTab, reportSelectedMonth, selectedPullOutDate]);
+
+  // Sync pull-out worker inputs when selection changes or records update
+  useEffect(() => {
+    if (!selectedPullOutDate || !selectedPullOutSite) return;
+    
+    const existing = pullOutMonitoringRecords.find(r => 
+      r.date === selectedPullOutDate && 
+      r.site.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()
+    );
+    
+    const initialStatus: Record<string, { status: "Present" | "Not Present"; timeIn: string; timeOut: string }> = {};
+    
+    // Find all assigned workers from standard submissions
+    const assignedWorkers = submissions.filter(s => 
+      s.date === selectedPullOutDate && 
+      s.isPullOut && 
+      s.pullOutSite && 
+      s.pullOutSite.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()
+    );
+    
+    assignedWorkers.forEach(w => {
+      const key = `${w.laborCode}-${w.laborsName}`;
+      
+      // Look for this worker in the saved monitoring record
+      const savedWorker = existing?.workers?.find((sw: any) => 
+        (sw.laborCode && sw.laborCode !== "N/A" && sw.laborCode === w.laborCode) || 
+        sw.laborsName === w.laborsName
+      );
+      
+      if (savedWorker) {
+        initialStatus[key] = {
+          status: savedWorker.status || "Present",
+          timeIn: savedWorker.timeIn || "08:00",
+          timeOut: savedWorker.timeOut || "17:00"
+        };
+      } else {
+        initialStatus[key] = {
+          status: "Present",
+          timeIn: "08:00",
+          timeOut: "17:00"
+        };
+      }
+    });
+    
+    setPullOutWorkerStatus(initialStatus);
+  }, [selectedPullOutDate, selectedPullOutSite, pullOutMonitoringRecords, submissions]);
 
   const handleLaborCodeChange = (codeVal: string) => {
     const upperCode = codeVal.toUpperCase().trim();
@@ -1265,6 +1365,241 @@ export default function App() {
     }
   };
 
+  // Save or update pull-out monitoring verification record
+  const handleSavePullOutMonitoring = async () => {
+    if (!selectedPullOutDate || !selectedPullOutSite) {
+      setPullOutSaveError("Please select a date and site.");
+      return;
+    }
+
+    setIsSavingPullOutRecord(true);
+    setPullOutSaveSuccess(false);
+    setPullOutSaveError("");
+
+    try {
+      // Find matching standard relocations to pull names/codes
+      const assignedWorkers = submissions.filter(s => 
+        s.date === selectedPullOutDate && 
+        s.isPullOut && 
+        s.pullOutSite && 
+        s.pullOutSite.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()
+      );
+
+      const workersPayload = assignedWorkers.map(w => {
+        const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+        const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+        const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+
+        const statusData = pullOutWorkerStatus[`${w.laborCode}-${w.laborsName}`] || 
+                           pullOutWorkerStatus[`${resolvedCode}-${w.laborsName}`] || 
+                           { status: "Present", timeIn: "08:00", timeOut: "17:00" };
+
+        return {
+          laborsName: w.laborsName,
+          laborCode: resolvedCode,
+          status: statusData.status,
+          timeIn: statusData.status === "Present" ? statusData.timeIn : "",
+          timeOut: statusData.status === "Present" ? statusData.timeOut : "",
+          pullOutReason: w.pullOutReason || "NOT SPECIFIED"
+        };
+      });
+
+      // Find if we already have an ID for this record
+      const existingRecord = pullOutMonitoringRecords.find(r => 
+        r.date === selectedPullOutDate && 
+        r.site.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()
+      );
+
+      const payload = {
+        id: existingRecord?.id || undefined,
+        date: selectedPullOutDate,
+        site: selectedPullOutSite.toUpperCase().trim(),
+        workers: workersPayload
+      };
+
+      const res = await fetch("/api/pull-out-monitoring", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        setPullOutSaveSuccess(true);
+        // Refresh records list
+        await fetchPullOutMonitoring();
+        setTimeout(() => setPullOutSaveSuccess(false), 3000);
+      } else {
+        const errData = await res.json();
+        setPullOutSaveError(errData.error || "Failed to save record.");
+      }
+    } catch (err: any) {
+      setPullOutSaveError(err.message || "Network error saving record.");
+    } finally {
+      setIsSavingPullOutRecord(false);
+    }
+  };
+
+  // Delete specific daily workers from the current site's daily report
+  const handleDeleteDailyWorkers = (laborNamesToDelete: string[]) => {
+    if (laborNamesToDelete.length === 0) return;
+
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Relocation Record",
+      message: `Are you sure you want to permanently delete the relocation record(s) for ${
+        laborNamesToDelete.length === 1 ? laborNamesToDelete[0] : `${laborNamesToDelete.length} selected worker(s)`
+      } from ${reportSelectedSite} on ${selectedPullOutDate}? This will remove them from the daily report and original logging.`,
+      confirmText: "Yes, Delete",
+      onConfirm: async () => {
+        try {
+          // 1. Find and delete corresponding submissions
+          const matchingSubmissions = submissions.filter(s => 
+            s.date === selectedPullOutDate &&
+            s.isPullOut &&
+            s.pullOutSite && s.pullOutSite.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim() &&
+            laborNamesToDelete.map(name => name.toUpperCase().trim()).includes((s.laborsName || "").toUpperCase().trim())
+          );
+
+          for (const sub of matchingSubmissions) {
+            await fetch(`/api/submissions/${sub.id}`, { method: "DELETE" });
+          }
+
+          // 2. Find and update/delete pull-out monitoring record
+          const monitoringRecord = pullOutMonitoringRecords.find(r => 
+            r.date === selectedPullOutDate && 
+            r.site.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim()
+          );
+
+          if (monitoringRecord) {
+            const updatedWorkers = (monitoringRecord.workers || []).filter((w: any) => 
+              !laborNamesToDelete.map(name => name.toUpperCase().trim()).includes((w.laborsName || "").toUpperCase().trim())
+            );
+
+            if (updatedWorkers.length === 0) {
+              // Delete the verified record entirely
+              await fetch(`/api/pull-out-monitoring/${monitoringRecord.id}`, { method: "DELETE" });
+            } else {
+              // Update the verified record
+              const payload = {
+                id: monitoringRecord.id,
+                date: monitoringRecord.date,
+                site: monitoringRecord.site,
+                workers: updatedWorkers
+              };
+              await fetch("/api/pull-out-monitoring", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+            }
+          }
+
+          // 3. Refresh and update state
+          await fetchSubmissions();
+          await fetchPullOutMonitoring();
+          setSelectedReportLaborNames([]);
+          showNotification("Success", "Relocation record(s) deleted successfully.", "success");
+        } catch (err) {
+          console.error("Error deleting relocation records:", err);
+          showNotification("Error", "Failed to delete some records. Please try again.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  // Delete specific days' records from the current site's monthly report
+  const handleDeleteMonthlyDays = (datesToDelete: string[]) => {
+    if (datesToDelete.length === 0) return;
+
+    setConfirmState({
+      isOpen: true,
+      title: "Delete Relocation Records",
+      message: `Are you sure you want to permanently delete all relocation and verified attendance records for ${
+        datesToDelete.length === 1 ? datesToDelete[0] : `${datesToDelete.length} selected days`
+      } on site ${reportSelectedSite}?`,
+      confirmText: "Yes, Delete",
+      onConfirm: async () => {
+        try {
+          // 1. Find and delete corresponding submissions
+          const matchingSubmissions = submissions.filter(s => 
+            datesToDelete.includes(s.date) &&
+            s.isPullOut &&
+            s.pullOutSite && s.pullOutSite.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim()
+          );
+
+          for (const sub of matchingSubmissions) {
+            await fetch(`/api/submissions/${sub.id}`, { method: "DELETE" });
+          }
+
+          // 2. Find and delete corresponding pull-out monitoring records
+          const matchingRecords = pullOutMonitoringRecords.filter(r => 
+            datesToDelete.includes(r.date) &&
+            r.site.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim()
+          );
+
+          for (const rec of matchingRecords) {
+            await fetch(`/api/pull-out-monitoring/${rec.id}`, { method: "DELETE" });
+          }
+
+          // 3. Refresh and update state
+          await fetchSubmissions();
+          await fetchPullOutMonitoring();
+          setSelectedReportDates([]);
+          showNotification("Success", "Relocation records deleted successfully.", "success");
+        } catch (err) {
+          console.error("Error deleting relocation records:", err);
+          showNotification("Error", "Failed to delete records. Please try again.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  // Delete all records for a site (Directory cleanup)
+  const handleDeleteAllSiteRecords = (siteName: string) => {
+    setConfirmState({
+      isOpen: true,
+      title: "Clear All Site Records",
+      message: `Are you sure you want to permanently delete ALL relocation, attendance logs, and verified records for site "${siteName}"? This action cannot be undone.`,
+      confirmText: "Yes, Clear All",
+      onConfirm: async () => {
+        try {
+          // 1. Find and delete corresponding submissions
+          const matchingSubmissions = submissions.filter(s => 
+            s.isPullOut &&
+            s.pullOutSite && s.pullOutSite.toUpperCase().trim() === siteName.toUpperCase().trim()
+          );
+
+          for (const sub of matchingSubmissions) {
+            await fetch(`/api/submissions/${sub.id}`, { method: "DELETE" });
+          }
+
+          // 2. Find and delete corresponding pull-out monitoring records
+          const matchingRecords = pullOutMonitoringRecords.filter(r => 
+            r.site.toUpperCase().trim() === siteName.toUpperCase().trim()
+          );
+
+          for (const rec of matchingRecords) {
+            await fetch(`/api/pull-out-monitoring/${rec.id}`, { method: "DELETE" });
+          }
+
+          // 3. Refresh and update state
+          await fetchSubmissions();
+          await fetchPullOutMonitoring();
+          showNotification("Success", `All relocation records for site "${siteName}" cleared successfully.`, "success");
+        } catch (err) {
+          console.error("Error clearing site records:", err);
+          showNotification("Error", "Failed to clear site records. Please try again.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
   // Submission execution
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1311,6 +1646,32 @@ export default function App() {
         return;
       }
 
+      if (!formData.isPullOut) {
+        if (formData.attendanceStatus === "Absent") {
+          if (!formData.absentReason) {
+            setSubmitError("Please select a reason for absence.");
+            return;
+          }
+          if (formData.absentReason === "Others" && !formData.absentReasonOther.trim()) {
+            setSubmitError("Please specify the custom reason for absence.");
+            return;
+          }
+        } else if (formData.attendanceStatus === "Under Time") {
+          if (!formData.underTimeTime) {
+            setSubmitError("Please enter the time of under time.");
+            return;
+          }
+          if (!formData.underTimeReason) {
+            setSubmitError("Please select a reason for under time.");
+            return;
+          }
+          if (formData.underTimeReason === "Others" && !formData.underTimeReasonOther.trim()) {
+            setSubmitError("Please specify the custom reason for under time.");
+            return;
+          }
+        }
+      }
+
       payload = {
         ...payload,
         laborsName: formData.laborsName.trim().toUpperCase(),
@@ -1323,6 +1684,15 @@ export default function App() {
         workCompletedTodayPercent: "",
         noOfLaborSubcontractor: "",
         equipment: "",
+        isPullOut: formData.isPullOut,
+        absentReason: formData.attendanceStatus === "Absent" ? formData.absentReason : "",
+        absentReasonOther: (formData.attendanceStatus === "Absent" && formData.absentReason === "Others") ? formData.absentReasonOther : "",
+        underTimeTime: formData.attendanceStatus === "Under Time" ? formData.underTimeTime : "",
+        underTimeReason: formData.attendanceStatus === "Under Time" ? formData.underTimeReason : "",
+        underTimeReasonOther: (formData.attendanceStatus === "Under Time" && formData.underTimeReason === "Others") ? formData.underTimeReasonOther : "",
+        pullOutTime: formData.isPullOut ? formData.pullOutTime : "",
+        pullOutSite: formData.isPullOut ? formData.pullOutSite : "",
+        pullOutReason: formData.isPullOut ? formData.pullOutReason : "",
       };
     } else {
       // "monitoring" tab
@@ -1345,6 +1715,15 @@ export default function App() {
         equipment: formData.equipment.trim().toUpperCase(),
         remarks: formData.remarks.trim().toUpperCase(),
         images: formImages,
+        isPullOut: false,
+        absentReason: "",
+        absentReasonOther: "",
+        underTimeTime: "",
+        underTimeReason: "",
+        underTimeReasonOther: "",
+        pullOutTime: "",
+        pullOutSite: "",
+        pullOutReason: "",
       };
     }
 
@@ -1377,6 +1756,15 @@ export default function App() {
           noOfLaborSubcontractor: "",
           equipment: "",
           remarks: "",
+          isPullOut: false,
+          absentReason: "",
+          absentReasonOther: "",
+          underTimeTime: "",
+          underTimeReason: "",
+          underTimeReasonOther: "",
+          pullOutTime: "",
+          pullOutSite: "",
+          pullOutReason: "",
         }));
         setMatchedLaborName("");
         // Also refresh the separate daily and monthly ledger files list and submissions in the background
@@ -1462,6 +1850,39 @@ export default function App() {
     } finally {
       setIsLoadingLogs(false);
     }
+  };
+
+  const fetchPullOutMonitoring = async () => {
+    setIsLoadingPullOutMonitoring(true);
+    try {
+      const res = await fetch("/api/pull-out-monitoring");
+      if (res.ok) {
+        const data = await res.json();
+        setPullOutMonitoringRecords(data);
+      }
+    } catch (err) {
+      console.error("Error loading pull-out monitoring records:", err);
+    } finally {
+      setIsLoadingPullOutMonitoring(false);
+    }
+  };
+
+  const getProjectAndSiteForVerification = (siteName: string) => {
+    if (!siteName) return "";
+    const assigned = submissions.filter(s => 
+      s.date === selectedPullOutDate && 
+      s.isPullOut && 
+      s.pullOutSite && 
+      s.pullOutSite.toUpperCase().trim() === siteName.toUpperCase().trim()
+    );
+    const projects = Array.from(new Set(assigned.map(w => w.project?.toUpperCase().trim()).filter(Boolean)));
+    
+    // Check if siteName already starts with or contains any of the project codes to avoid duplicate code prefixes
+    const hasProjectCode = projects.some(p => siteName.toUpperCase().includes((p as string)));
+    if (projects.length > 0 && !hasProjectCode) {
+      return `${projects.join(", ")} + ${siteName}`;
+    }
+    return siteName;
   };
 
   const fetchLedgerFiles = async () => {
@@ -2593,6 +3014,331 @@ export default function App() {
     }
   };
 
+  // Dedicated PDF Exporter for Relocation & Monitoring Reports
+  const exportRelocationReportPDF = async (siteName: string, type: "daily" | "monthly", dateOrMonth: string) => {
+    if (!siteName) {
+      showNotification("Export Error", "Please select a project site location first.", "error");
+      return;
+    }
+
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const autoTableFn = autoTableModule.default;
+
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4"
+      });
+
+      // Header Brand bar styling
+      doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
+      doc.rect(0, 0, 210, 35, "F");
+
+      // Corporate Header Texts
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 12);
+
+      doc.setFont("Helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(203, 213, 225); // slate-300
+      doc.text(`RELOCATION & LABOR MONITORING REPORT (${type.toUpperCase()})`, 15, 18);
+      doc.text("DOCUMENT CONTROLLER SECURE MONITORING DATABASE", 15, 23);
+
+      doc.setFont("Helvetica", "italic");
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.text(`Generated on: ${new Date().toLocaleString()}`, 15, 29);
+
+      // Section metadata box below header
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.rect(10, 38, 190, 20);
+
+      doc.setFont("Helvetica", "bold");
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text("PROJECT SITE:", 14, 44);
+      doc.text("REPORT INTERVAL:", 14, 52);
+      doc.text("GENERATED FOR:", 110, 44);
+      doc.text("DATABASE CLASS:", 110, 52);
+
+      doc.setTextColor(15, 23, 42); // slate-900
+      doc.text(siteName.toUpperCase(), 38, 44);
+      doc.text(type.toUpperCase() === "DAILY" ? "DAILY REPORT" : "MONTHLY REPORT", 48, 52);
+      doc.text(dateOrMonth, 140, 44);
+      doc.text("SECURE LOCAL SQL DATABASE", 140, 52);
+
+      if (type === "daily") {
+        const monitoringRecord = pullOutMonitoringRecords.find(r => 
+          r.date === dateOrMonth && 
+          r.site.toUpperCase().trim() === siteName.toUpperCase().trim()
+        );
+
+        const assignedSubmissions = submissions.filter(s => 
+          s.date === dateOrMonth && 
+          s.isPullOut && 
+          s.pullOutSite && 
+          s.pullOutSite.toUpperCase().trim() === siteName.toUpperCase().trim()
+        );
+
+        if (assignedSubmissions.length === 0) {
+          showNotification("Export Warning", "No relocations logged for this site on this date.", "info");
+          return;
+        }
+
+        const totalAssigned = assignedSubmissions.length;
+        let presentCount = 0;
+        let absentCount = 0;
+
+        if (monitoringRecord) {
+          monitoringRecord.workers?.forEach((w: any) => {
+            if (w.status === "Present") presentCount++;
+            else absentCount++;
+          });
+        } else {
+          presentCount = totalAssigned;
+        }
+
+        const presentRate = totalAssigned > 0 ? Math.round((presentCount / totalAssigned) * 100) : 0;
+
+        // Draw metrics boxes
+        doc.setFillColor(241, 245, 249); // slate-100
+        doc.rect(10, 62, 190, 14, "F");
+
+        doc.setFontSize(8);
+        doc.setFont("Helvetica", "bold");
+        doc.setTextColor(51, 65, 85);
+        doc.text(`TOTAL ASSIGNED: ${totalAssigned}`, 15, 71);
+        doc.text(`VERIFIED PRESENT: ${presentCount}`, 65, 71);
+        doc.text(`NO-SHOWS: ${absentCount}`, 120, 71);
+        doc.text(`PRESENCE SCORE: ${presentRate}%`, 165, 71);
+
+        const tableColumns = [
+          "S.NO",
+          "LABOR CODE",
+          "LABOR NAME",
+          "AUDIT STATUS",
+          "TIME IN",
+          "TIME OUT",
+          "RELOCATION REASON"
+        ];
+
+        const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+        const listToRender = monitoringRecord && monitoringRecord.workers && monitoringRecord.workers.length > 0
+          ? monitoringRecord.workers
+          : assignedSubmissions.map(w => {
+              const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+              const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+              return {
+                laborCode: resolvedCode,
+                laborsName: w.laborsName,
+                status: "Present",
+                timeIn: "08:00",
+                timeOut: "17:00",
+                pullOutReason: w.pullOutReason || "NOT SPECIFIED"
+              };
+            });
+
+        const tableRows = listToRender.map((w: any, index: number) => {
+          const status = w.status || "Present";
+          const isPresent = status === "Present";
+          const timeIn = isPresent ? (w.timeIn || "08:00") : "N/A";
+          const timeOut = isPresent ? (w.timeOut || "17:00") : "N/A";
+          
+          const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+          const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+
+          return [
+            index + 1,
+            resolvedCode,
+            w.laborsName ? w.laborsName.toUpperCase() : "-",
+            status.toUpperCase(),
+            timeIn,
+            timeOut,
+            (w.pullOutReason || "NOT SPECIFIED").toUpperCase()
+          ];
+        });
+
+        const tableOptions = {
+          head: [tableColumns],
+          body: tableRows,
+          startY: 82,
+          theme: "striped" as const,
+          headStyles: {
+            fillColor: [15, 23, 42] as [number, number, number],
+            textColor: [255, 255, 255] as [number, number, number],
+            fontSize: 7.5,
+            fontStyle: "bold" as const,
+            halign: "center" as const
+          },
+          bodyStyles: {
+            fontSize: 7.5,
+            textColor: [51, 65, 85] as [number, number, number]
+          },
+          columnStyles: {
+            0: { cellWidth: 12, halign: "center" as const },
+            1: { cellWidth: 24, halign: "center" as const },
+            2: { cellWidth: 45 },
+            3: { cellWidth: 24, halign: "center" as const },
+            4: { cellWidth: 18, halign: "center" as const },
+            5: { cellWidth: 18, halign: "center" as const },
+            6: { cellWidth: 49 }
+          },
+          styles: {
+            cellPadding: 2,
+            lineColor: [226, 232, 240] as [number, number, number],
+            lineWidth: 0.1,
+            font: "Helvetica",
+            valign: "middle" as const,
+            overflow: "linebreak" as const
+          },
+          margin: { left: 10, right: 10 }
+        };
+
+        if (typeof autoTableFn === "function") {
+          autoTableFn(doc, tableOptions);
+        } else if (typeof (doc as any).autoTable === "function") {
+          (doc as any).autoTable(tableOptions);
+        }
+
+      } else {
+        // Monthly
+        const monthRecords = pullOutMonitoringRecords.filter(r => 
+          r.date.startsWith(dateOrMonth) &&
+          r.site.toUpperCase().trim() === siteName.toUpperCase().trim()
+        );
+
+        monthRecords.sort((a, b) => a.date.localeCompare(b.date));
+
+        if (monthRecords.length === 0) {
+          showNotification("Export Warning", "No verified pull-out attendance records found for this site in this month.", "info");
+          return;
+        }
+
+        const totalDaysWithPullOuts = monthRecords.length;
+        let totalPresentManDays = 0;
+        let totalAbsentManDays = 0;
+        let totalRelocationsCount = 0;
+
+        monthRecords.forEach(r => {
+          r.workers?.forEach((w: any) => {
+            totalRelocationsCount++;
+            if (w.status === "Present") totalPresentManDays++;
+            else totalAbsentManDays++;
+          });
+        });
+
+        const averagePresenceRate = totalRelocationsCount > 0 
+          ? Math.round((totalPresentManDays / totalRelocationsCount) * 100) 
+          : 0;
+
+        // Draw metrics boxes
+        doc.setFillColor(241, 245, 249); // slate-100
+        doc.rect(10, 62, 190, 14, "F");
+
+        doc.setFontSize(8);
+        doc.setFont("Helvetica", "bold");
+        doc.setTextColor(51, 65, 85);
+        doc.text(`AUDITED DAYS: ${totalDaysWithPullOuts}`, 15, 71);
+        doc.text(`ASSIGNED MAN-DAYS: ${totalRelocationsCount}`, 65, 71);
+        doc.text(`PRESENT MAN-DAYS: ${totalPresentManDays}`, 120, 71);
+        doc.text(`AVG PRESENCE RATE: ${averagePresenceRate}%`, 165, 71);
+
+        const tableColumns = [
+          "S.NO",
+          "DATE",
+          "ASSIGNED",
+          "PRESENT",
+          "NO-SHOW",
+          "PRESENCE %",
+          "RELOCATED WORKERS ROSTER"
+        ];
+
+        const tableRows = monthRecords.map((record, index) => {
+          const dayTotal = record.workers?.length || 0;
+          let dayPresent = 0;
+          let dayAbsent = 0;
+
+          record.workers?.forEach((w: any) => {
+            if (w.status === "Present") dayPresent++;
+            else dayAbsent++;
+          });
+
+          const dayRate = dayTotal > 0 ? Math.round((dayPresent / dayTotal) * 100) : 0;
+
+          const rosterString = record.workers?.map((w: any) => {
+            const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+            const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+            const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+            return `${resolvedCode}(${w.status === "Present" ? w.timeIn : "A"})`;
+          }).join(", ") || "-";
+
+          return [
+            index + 1,
+            record.date,
+            dayTotal,
+            dayPresent,
+            dayAbsent,
+            `${dayRate}%`,
+            rosterString.toUpperCase()
+          ];
+        });
+
+        const tableOptions = {
+          head: [tableColumns],
+          body: tableRows,
+          startY: 82,
+          theme: "striped" as const,
+          headStyles: {
+            fillColor: [15, 23, 42] as [number, number, number],
+            textColor: [255, 255, 255] as [number, number, number],
+            fontSize: 7.5,
+            fontStyle: "bold" as const,
+            halign: "center" as const
+          },
+          bodyStyles: {
+            fontSize: 7.5,
+            textColor: [51, 65, 85] as [number, number, number]
+          },
+          columnStyles: {
+            0: { cellWidth: 12, halign: "center" as const },
+            1: { cellWidth: 24, halign: "center" as const },
+            2: { cellWidth: 22, halign: "center" as const },
+            3: { cellWidth: 22, halign: "center" as const },
+            4: { cellWidth: 22, halign: "center" as const },
+            5: { cellWidth: 24, halign: "center" as const },
+            6: { cellWidth: 64 }
+          },
+          styles: {
+            cellPadding: 2,
+            lineColor: [226, 232, 240] as [number, number, number],
+            lineWidth: 0.1,
+            font: "Helvetica",
+            valign: "middle" as const,
+            overflow: "linebreak" as const
+          },
+          margin: { left: 10, right: 10 }
+        };
+
+        if (typeof autoTableFn === "function") {
+          autoTableFn(doc, tableOptions);
+        } else if (typeof (doc as any).autoTable === "function") {
+          (doc as any).autoTable(tableOptions);
+        }
+      }
+
+      doc.save(`relocation_monitoring_${type}_report_${siteName.replace(/[^a-zA-Z0-9]/g, "_")}_${dateOrMonth}.pdf`);
+      showNotification("PDF Saved", "Relocation monitoring report exported and saved successfully.", "success");
+    } catch (err) {
+      console.error("Failed to export PDF:", err);
+      showNotification("Export Failed", "Error compiling PDF report document.", "error");
+    }
+  };
+
   // Pre-fill helper
   const quickSetField = (field: "project" | "projectLocation" | "siteEngineer", value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -2648,24 +3394,43 @@ export default function App() {
             <span className="h-2 w-2 rounded-full bg-slate-400 animate-pulse"></span>
             <span className="text-slate-300 tracking-wider">MONITORING SYSTEM • DOCUMENT CONTROLLER</span>
           </div>
-          <div className="flex items-center gap-4">
-            {currentView === "form" ? (
-              <button 
-                id="view-admin-btn"
-                onClick={() => setCurrentView("admin")}
-                className="flex items-center gap-1.5 hover:text-white transition-colors duration-200 cursor-pointer text-slate-300 font-medium"
-              >
-                <Lock className="h-3.5 w-3.5 text-slate-400" /> Document Controller Database View
-              </button>
-            ) : (
-              <button 
-                id="view-form-btn"
-                onClick={() => setCurrentView("form")}
-                className="flex items-center gap-1.5 hover:text-white transition-colors duration-200 cursor-pointer text-slate-300 font-medium"
-              >
-                <PlusCircle className="h-3.5 w-3.5 text-slate-400" /> Back to Blank Logging Form
-              </button>
-            )}
+          <div className="flex items-center gap-3 md:gap-4 flex-wrap">
+            <button 
+              id="view-form-btn"
+              onClick={() => setCurrentView("form")}
+              className={`flex items-center gap-1.5 transition-colors duration-200 cursor-pointer font-medium ${
+                currentView === "form" ? "text-white font-bold underline decoration-indigo-400 underline-offset-4" : "hover:text-white text-slate-400"
+              }`}
+            >
+              <PlusCircle className="h-3.5 w-3.5" /> Blank Form
+            </button>
+
+            <span className="text-slate-700 select-none">|</span>
+
+            <button 
+              id="view-pullout-btn"
+              onClick={() => {
+                setCurrentView("pullout");
+                fetchPullOutMonitoring();
+              }}
+              className={`flex items-center gap-1.5 transition-colors duration-200 cursor-pointer font-medium ${
+                currentView === "pullout" ? "text-white font-bold underline decoration-indigo-400 underline-offset-4" : "hover:text-white text-slate-400"
+              }`}
+            >
+              <LogOut className="h-3.5 w-3.5 rotate-180" /> Pull-Out Portal
+            </button>
+
+            <span className="text-slate-700 select-none">|</span>
+
+            <button 
+              id="view-admin-btn"
+              onClick={() => setCurrentView("admin")}
+              className={`flex items-center gap-1.5 transition-colors duration-200 cursor-pointer font-medium ${
+                currentView === "admin" ? "text-white font-bold underline decoration-indigo-400 underline-offset-4" : "hover:text-white text-slate-400"
+              }`}
+            >
+              <Lock className="h-3.5 w-3.5" /> Database Admin
+            </button>
           </div>
         </div>
       </div>
@@ -3025,53 +3790,254 @@ export default function App() {
                       </div>
 
                       {/* ATTENDANCE STATUS SECTION */}
-                      <div className="pt-4 border-t border-slate-100">
-                        <label className="block text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5">
-                          <UserCheck className="h-3.5 w-3.5 text-slate-400" /> Labor Attendance Status
-                        </label>
-                        <div id="attendance-status-selector" className="grid grid-cols-3 gap-4 max-w-lg">
-                          <button
-                            id="attendance-btn-present"
-                            type="button"
-                            onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Present" }))}
-                            className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
-                              formData.attendanceStatus === "Present"
-                                ? "bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-100"
-                                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Present" ? "bg-white" : "bg-emerald-500"}`}></span>
-                            Present
-                          </button>
+                      <div className="pt-4 border-t border-slate-100 space-y-6">
+                        <div>
+                          <label className="block text-2xs font-semibold text-slate-400 tracking-wider uppercase mb-3 flex items-center gap-1.5">
+                            <UserCheck className="h-3.5 w-3.5 text-slate-400" /> Labor Attendance Status
+                          </label>
+                          <div id="attendance-status-selector" className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-2xl">
+                            {/* PRESENT */}
+                            <button
+                              id="attendance-btn-present"
+                              type="button"
+                              onClick={() => setFormData(prev => ({ 
+                                ...prev, 
+                                isPullOut: false, 
+                                attendanceStatus: "Present" 
+                              }))}
+                              className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                                !formData.isPullOut && formData.attendanceStatus === "Present"
+                                  ? "bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-100"
+                                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                              }`}
+                            >
+                              <span className={`h-2 w-2 rounded-full ${(!formData.isPullOut && formData.attendanceStatus === "Present") ? "bg-white" : "bg-emerald-500"}`}></span>
+                              Present
+                            </button>
 
-                          <button
-                            id="attendance-btn-absent"
-                            type="button"
-                            onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Absent" }))}
-                            className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
-                              formData.attendanceStatus === "Absent"
-                                ? "bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-100"
-                                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Absent" ? "bg-white" : "bg-rose-500"}`}></span>
-                            Absent
-                          </button>
+                            {/* ABSENT */}
+                            <button
+                              id="attendance-btn-absent"
+                              type="button"
+                              onClick={() => setFormData(prev => ({ 
+                                ...prev, 
+                                isPullOut: false, 
+                                attendanceStatus: "Absent" 
+                              }))}
+                              className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                                !formData.isPullOut && formData.attendanceStatus === "Absent"
+                                  ? "bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-100"
+                                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                              }`}
+                            >
+                              <span className={`h-2 w-2 rounded-full ${(!formData.isPullOut && formData.attendanceStatus === "Absent") ? "bg-white" : "bg-rose-500"}`}></span>
+                              Absent
+                            </button>
 
-                          <button
-                            id="attendance-btn-undertime"
-                            type="button"
-                            onClick={() => setFormData(prev => ({ ...prev, attendanceStatus: "Under Time" }))}
-                            className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
-                              formData.attendanceStatus === "Under Time"
-                                ? "bg-amber-600 text-white border-amber-600 shadow-sm shadow-amber-100"
-                                : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
-                            }`}
-                          >
-                            <span className={`h-2 w-2 rounded-full ${formData.attendanceStatus === "Under Time" ? "bg-white" : "bg-amber-500"}`}></span>
-                            Under Time
-                          </button>
+                            {/* UNDER TIME */}
+                            <button
+                              id="attendance-btn-undertime"
+                              type="button"
+                              onClick={() => setFormData(prev => ({ 
+                                ...prev, 
+                                isPullOut: false, 
+                                attendanceStatus: "Under Time" 
+                              }))}
+                              className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                                !formData.isPullOut && formData.attendanceStatus === "Under Time"
+                                  ? "bg-amber-600 text-white border-amber-600 shadow-sm shadow-amber-100"
+                                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                              }`}
+                            >
+                              <span className={`h-2 w-2 rounded-full ${(!formData.isPullOut && formData.attendanceStatus === "Under Time") ? "bg-white" : "bg-amber-500"}`}></span>
+                              Under Time
+                            </button>
+
+                            {/* PULL OUT */}
+                            <button
+                              id="attendance-btn-pullout"
+                              type="button"
+                              onClick={() => setFormData(prev => ({ 
+                                ...prev, 
+                                isPullOut: true, 
+                                attendanceStatus: "Under Time" // Automatically set to Under Time when PULL OUT is selected
+                              }))}
+                              className={`py-3 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-2 ${
+                                formData.isPullOut
+                                  ? "bg-indigo-600 text-white border-indigo-600 shadow-sm shadow-indigo-100"
+                                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                              }`}
+                            >
+                              <span className={`h-2 w-2 rounded-full ${formData.isPullOut ? "bg-white" : "bg-indigo-400"}`}></span>
+                              Pull Out
+                            </button>
+                          </div>
                         </div>
+
+                        {/* IF PULL OUT: SHOW PULL OUT MANDATORY DETAILS ONLY */}
+                        {formData.isPullOut && (
+                          <div id="pull-out-details-form" className="bg-indigo-50/40 p-5 rounded-2xl border border-indigo-100 space-y-4 animate-fade-in max-w-lg">
+                            <h4 className="text-2xs font-bold text-indigo-850 tracking-wider uppercase flex items-center gap-1.5 mb-2 font-mono">
+                              <LogOut className="h-3.5 w-3.5 text-indigo-600 rotate-180" /> Pull Out Details (Relocation Info)
+                            </h4>
+                            <div className="grid grid-cols-1 gap-4">
+                              {/* SELECT SITE FOR PULL-OUT */}
+                              <div className="flex flex-col">
+                                <SearchableDropdown
+                                  id="select-pull-out-site"
+                                  label="Select Project Site for Pull-Out"
+                                  icon={<MapPin className="h-3.5 w-3.5 text-slate-400" />}
+                                  placeholder="Select or search destination site..."
+                                  options={(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).map(pc => ({
+                                    value: pc.location ? `${pc.code} + ${pc.location}` : pc.code,
+                                    label: pc.name,
+                                    sublabel: pc.location
+                                  }))}
+                                  value={formData.pullOutSite}
+                                  onChange={(val) => setFormData(prev => ({ ...prev, pullOutSite: val }))}
+                                  required
+                                  allowCustom
+                                  containerId="select-pull-out-site-container"
+                                  onlyDisplayValue
+                                />
+                              </div>
+
+                              {/* ENTER TIME OF PULL-OUT */}
+                              <div className="flex flex-col">
+                                <label className="text-2xs font-semibold text-slate-500 tracking-wider uppercase mb-1.5 flex items-center gap-1 font-sans">
+                                  Time of Pull Out (under time due to pull-out)
+                                </label>
+                                <input
+                                  id="input-pull-out-time"
+                                  type="time"
+                                  required
+                                  value={formData.pullOutTime}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, pullOutTime: e.target.value }))}
+                                  className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all"
+                                />
+                              </div>
+
+                              {/* ENTER REASON WHY THEY NEED TO PULL OUT */}
+                              <div className="flex flex-col">
+                                <label className="text-2xs font-semibold text-slate-500 tracking-wider uppercase mb-1.5 flex items-center gap-1 font-sans">
+                                  Reason why they need to pull out
+                                </label>
+                                <textarea
+                                  id="input-pull-out-reason"
+                                  required
+                                  placeholder="State why this labor needs to be pulled out (e.g., URGENT CONCRETE WORK, TILING TEAM SHORTAGE, etc.)..."
+                                  value={formData.pullOutReason}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, pullOutReason: e.target.value.toUpperCase() }))}
+                                  className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all h-20 resize-none uppercase"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* IF NOT PULL OUT & ABSENT: SHOW REASON SELECTION */}
+                        {!formData.isPullOut && formData.attendanceStatus === "Absent" && (
+                          <div id="absent-details-form" className="bg-rose-50/40 p-5 rounded-2xl border border-rose-100 space-y-4 animate-fade-in max-w-lg">
+                            <h4 className="text-2xs font-bold text-rose-800 tracking-wider uppercase flex items-center gap-1.5 mb-2">
+                              <AlertCircle className="h-3.5 w-3.5 text-rose-600" /> Reason for Absence
+                            </h4>
+                            <div className="grid grid-cols-2 gap-3">
+                              {["Annual Leave", "Sick Leave", "Emergency Leave", "Others"].map((reason) => (
+                                <button
+                                  key={reason}
+                                  id={`absent-reason-btn-${reason.toLowerCase().replace(" ", "-")}`}
+                                  type="button"
+                                  onClick={() => setFormData(prev => ({ ...prev, absentReason: reason }))}
+                                  className={`py-2.5 px-3 rounded-lg text-2xs font-bold border transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
+                                    formData.absentReason === reason
+                                      ? "bg-rose-600 text-white border-rose-600 shadow-sm"
+                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  {reason}
+                                </button>
+                              ))}
+                            </div>
+                            {formData.absentReason === "Others" && (
+                              <div className="flex flex-col pt-1">
+                                <label className="text-2xs font-semibold text-slate-500 tracking-wider uppercase mb-1 font-sans">
+                                  Specify Reason
+                                </label>
+                                <input
+                                  id="input-absent-reason-other"
+                                  type="text"
+                                  required
+                                  placeholder="State custom reason for absence..."
+                                  value={formData.absentReasonOther}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, absentReasonOther: e.target.value.toUpperCase() }))}
+                                  className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-rose-500/10 focus:border-rose-500 text-xs font-semibold text-slate-800 transition-all uppercase"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* IF NOT PULL OUT & UNDER TIME: SHOW UNDER TIME INPUTS */}
+                        {!formData.isPullOut && formData.attendanceStatus === "Under Time" && (
+                          <div id="undertime-details-form" className="bg-amber-50/45 p-5 rounded-2xl border border-amber-100 space-y-4 animate-fade-in max-w-lg">
+                            <h4 className="text-2xs font-bold text-amber-800 tracking-wider uppercase flex items-center gap-1.5 mb-2">
+                              <Clock className="h-3.5 w-3.5 text-amber-600" /> Under Time Details
+                            </h4>
+                            <div className="flex flex-col">
+                              <label className="text-2xs font-semibold text-slate-500 tracking-wider uppercase mb-1.5 flex items-center gap-1 font-sans">
+                                Time of Under Time (what time the labor will go under time)
+                              </label>
+                              <input
+                                  id="input-undertime-time"
+                                  type="time"
+                                  required
+                                  value={formData.underTimeTime}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, underTimeTime: e.target.value }))}
+                                  className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-amber-500 text-xs font-semibold text-slate-800 transition-all"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-2xs font-semibold text-slate-500 tracking-wider uppercase mb-1.5 flex items-center gap-1 font-sans">
+                                Reason for Under Time
+                              </label>
+                              <div className="grid grid-cols-2 gap-3">
+                                {["Annual Leave", "Sick Leave", "Emergency Leave", "Others"].map((reason) => (
+                                  <button
+                                    key={reason}
+                                    id={`undertime-reason-btn-${reason.toLowerCase().replace(" ", "-")}`}
+                                    type="button"
+                                    onClick={() => setFormData(prev => ({ ...prev, underTimeReason: reason }))}
+                                    className={`py-2.5 px-3 rounded-lg text-2xs font-bold border transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
+                                      formData.underTimeReason === reason
+                                        ? "bg-amber-600 text-white border-amber-600 shadow-sm"
+                                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    {reason}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {formData.underTimeReason === "Others" && (
+                              <div className="flex flex-col pt-1">
+                                <label className="text-2xs font-semibold text-slate-500 tracking-wider uppercase mb-1 font-sans">
+                                  Specify Reason
+                                </label>
+                                <input
+                                  id="input-undertime-reason-other"
+                                  type="text"
+                                  required
+                                  placeholder="State custom reason for undertime..."
+                                  value={formData.underTimeReasonOther}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, underTimeReasonOther: e.target.value.toUpperCase() }))}
+                                  className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-amber-500 text-xs font-semibold text-slate-800 transition-all uppercase"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -3313,7 +4279,1270 @@ export default function App() {
             </div>
           </div>
         )}
-                    {/* ADMIN DATABASE VIEW */}
+
+        {/* PULL-OUT PORTAL */}
+        {currentView === "pullout" && (
+          <div id="pullout-portal-container" className="space-y-6 animate-fade-in">
+            {/* Inner Tabs Navigation */}
+            <div className="bg-white rounded-3xl p-4 border border-slate-200/60 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl border border-indigo-100">
+                  <LogOut className="h-5 w-5 rotate-180" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Pull-Out Management Hub</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">Verify relocation status and compile monitoring reports</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200/50">
+                <button
+                  type="button"
+                  onClick={() => setActivePullOutSection("verification")}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    activePullOutSection === "verification"
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : "text-slate-600 hover:text-indigo-600 hover:bg-slate-200/30"
+                  }`}
+                >
+                  Verification Portal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivePullOutSection("reports");
+                    // Automatically pre-populate default report site if not set
+                    const allSites = Array.from(new Set([
+                      ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
+                      ...pullOutMonitoringRecords.map(r => r.site)
+                    ].map(s => s.toUpperCase().trim()))).filter(Boolean);
+                    if (allSites.length > 0 && !reportSelectedSite) {
+                      setReportSelectedSite(allSites[0]);
+                    }
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    activePullOutSection === "reports"
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : "text-slate-600 hover:text-indigo-600 hover:bg-slate-200/30"
+                  }`}
+                >
+                  Monitoring Reports
+                </button>
+              </div>
+            </div>
+
+            {/* VERIFICATION PORTAL SECTION */}
+            {activePullOutSection === "verification" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                
+                {/* Left Sidebar: Relocation Date and Destination list */}
+                <div className="lg:col-span-4 bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm space-y-5">
+                  <div className="border-b border-slate-100 pb-3 mb-2">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                      <Calendar className="h-4 w-4 text-slate-500" /> Relocation Date
+                    </h4>
+                  </div>
+
+                  <div className="flex flex-col">
+                    <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase mb-1.5">
+                      Select Target Date
+                    </label>
+                    <input
+                      type="date"
+                      value={selectedPullOutDate}
+                      onChange={(e) => {
+                        setSelectedPullOutDate(e.target.value);
+                        setSelectedPullOutSite(""); // Reset site on date change
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all font-mono"
+                    />
+                  </div>
+
+                  {/* Active Relocation Sites on selected date */}
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase flex items-center justify-between">
+                      <span>Active Destination Sites</span>
+                      <span className="font-mono bg-indigo-50 text-indigo-600 text-[9px] px-2 py-0.5 rounded-full border border-indigo-100">
+                        {(() => {
+                          const sFiltered = submissions.filter(s => s.date === selectedPullOutDate && s.isPullOut && s.pullOutSite);
+                          return Array.from(new Set(sFiltered.map(s => s.pullOutSite?.toUpperCase().trim()).filter(Boolean))).length;
+                        })()} Active
+                      </span>
+                    </label>
+
+                    {(() => {
+                      const sFiltered = submissions.filter(s => s.date === selectedPullOutDate && s.isPullOut && s.pullOutSite);
+                      const uniqueSites = Array.from(new Set(sFiltered.map(s => s.pullOutSite?.toUpperCase().trim()).filter(Boolean)));
+                      
+                      if (uniqueSites.length === 0) {
+                        return (
+                          <div className="p-5 text-center border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                            <MapPin className="h-7 w-7 text-slate-300 mx-auto mb-2" />
+                            <p className="text-[10px] text-slate-500 font-medium">
+                              No relocated workers logged on <strong className="font-semibold font-mono">{selectedPullOutDate}</strong>.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setCurrentView("form")}
+                              className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                            >
+                              <Plus className="h-3 w-3" /> Assign relocations
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-2 overflow-y-auto max-h-[250px] pr-1">
+                          {uniqueSites.map((site) => {
+                            const workersCount = sFiltered.filter(s => s.pullOutSite?.toUpperCase().trim() === site).length;
+                            const isSaved = pullOutMonitoringRecords.some(r => r.date === selectedPullOutDate && r.site.toUpperCase().trim() === site);
+                            const isActive = selectedPullOutSite.toUpperCase().trim() === site;
+
+                            return (
+                              <button
+                                key={site}
+                                type="button"
+                                onClick={() => setSelectedPullOutSite(site)}
+                                className={`w-full p-3.5 rounded-2xl border text-left flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                                  isActive
+                                    ? "bg-[#0F172A] text-white border-slate-900 shadow-md"
+                                    : "bg-slate-50/70 hover:bg-slate-50 text-slate-700 border-slate-200/80 hover:border-slate-300"
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <span className="text-xs font-bold block uppercase truncate tracking-tight">{getProjectAndSiteForVerification(site as string)}</span>
+                                  <span className={`text-[10px] font-mono mt-0.5 block ${isActive ? "text-slate-400" : "text-slate-500"}`}>
+                                    {workersCount} workers relocated
+                                  </span>
+                                </div>
+                                <div className="shrink-0 flex items-center gap-1.5">
+                                  {isSaved && (
+                                    <span className="h-2 w-2 rounded-full bg-emerald-500" title="Attendance verified & saved"></span>
+                                  )}
+                                  <ChevronRight className={`h-4 w-4 ${isActive ? "text-slate-300" : "text-slate-400"}`} />
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Right Workspace: Verification Intake Table */}
+                <div className="lg:col-span-8 bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm min-h-[400px]">
+                  {!selectedPullOutSite ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center py-16 text-slate-400 space-y-3">
+                      <div className="p-4 bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100">
+                        <LogOut className="h-8 w-8 rotate-180" />
+                      </div>
+                      <div className="max-w-md">
+                        <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Attendance Verification Portal</h4>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Select a date and choose an active pull-out destination site from the left menu to audit, verify, and complete relocated worker attendance logging.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {/* Active Site Title Banner */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2.5xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fade-in">
+                        <div className="space-y-0.5">
+                          <span className="text-[10px] font-black tracking-widest uppercase font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-full inline-block mb-1.5">
+                            Active Destination Audit
+                          </span>
+                          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
+                            <MapPin className="h-4 w-4 text-rose-500" /> {getProjectAndSiteForVerification(selectedPullOutSite)}
+                          </h4>
+                          <p className="text-[10px] text-slate-500 font-mono">
+                            Verifying relocated labor for <strong className="text-slate-700 font-semibold font-sans">{selectedPullOutDate}</strong>
+                          </p>
+                        </div>
+
+                        {pullOutMonitoringRecords.some(r => r.date === selectedPullOutDate && r.site.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()) && (
+                          <div className="self-start sm:self-center inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-mono font-bold uppercase rounded-full border border-emerald-100 shadow-3xs animate-fade-in">
+                            <CheckCircle2 className="h-3.5 w-3.5" /> RECORD VERIFIED &amp; SAVED
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Workers Attendance Rows */}
+                      <div className="space-y-3">
+                        <div className="hidden sm:grid sm:grid-cols-12 gap-4 px-4 py-2 text-[10px] font-black uppercase text-slate-400 tracking-wider border-b border-slate-100">
+                          <span className="col-span-1 text-center">S.No</span>
+                          <span className="col-span-5">Labor Code &amp; Name</span>
+                          <span className="col-span-3 text-center">Intake Status</span>
+                          <span className="col-span-3 text-center">Verification Timings</span>
+                        </div>
+
+                        <div className="space-y-3">
+                          {(() => {
+                            const assignedWorkers = submissions.filter(s => 
+                              s.date === selectedPullOutDate && 
+                              s.isPullOut && 
+                              s.pullOutSite && 
+                              s.pullOutSite.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()
+                            );
+
+                            return assignedWorkers.map((w, index) => {
+                              const key = `${w.laborCode}-${w.laborsName}`;
+                              const statusData = pullOutWorkerStatus[key] || { status: "Present", timeIn: "08:00", timeOut: "17:00" };
+                              const isPresent = statusData.status === "Present";
+
+                              return (
+                                <div
+                                  key={key}
+                                  className={`p-4 rounded-2xl border transition-all flex flex-col sm:grid sm:grid-cols-12 items-center gap-4 ${
+                                    isPresent
+                                      ? "bg-white border-slate-200 hover:border-slate-300"
+                                      : "bg-slate-50/50 border-slate-200/60 opacity-75"
+                                  }`}
+                                >
+                                  {/* S.No */}
+                                  <div className="col-span-1 text-center hidden sm:block">
+                                    <span className="text-[11px] font-mono font-bold text-slate-400">{index + 1}</span>
+                                  </div>
+
+                                  {/* Code & Name */}
+                                  <div className="col-span-5 w-full min-w-0 text-center sm:text-left">
+                                    <div className="flex flex-col sm:flex-row sm:items-baseline gap-1.5">
+                                      <span className="text-[10px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md inline-block">
+                                        {(() => {
+                                          const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                                          const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+                                          return matched ? matched.code : (w.laborCode || "N/A");
+                                        })()}
+                                      </span>
+                                      <span className="text-xs font-bold text-slate-800 uppercase tracking-tight block truncate font-sans">
+                                        {w.laborsName}
+                                      </span>
+                                    </div>
+                                    <span className="text-[9px] font-mono text-slate-400 mt-1 block uppercase truncate">
+                                      Relocated at {w.pullOutTime || "08:00"} • Reason: {w.pullOutReason || "NOT SPECIFIED"}
+                                    </span>
+                                  </div>
+
+                                  {/* Status Selector */}
+                                  <div className="col-span-3 w-full flex justify-center">
+                                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/50 w-full max-w-[200px]">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPullOutWorkerStatus(prev => ({
+                                          ...prev,
+                                          [key]: { ...statusData, status: "Present" }
+                                        }))}
+                                        className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer text-center ${
+                                          isPresent
+                                            ? "bg-emerald-600 text-white shadow-2xs"
+                                            : "text-slate-600 hover:text-slate-900"
+                                        }`}
+                                      >
+                                        Present
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setPullOutWorkerStatus(prev => ({
+                                          ...prev,
+                                          [key]: { ...statusData, status: "Not Present" }
+                                        }))}
+                                        className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer text-center ${
+                                          !isPresent
+                                            ? "bg-rose-600 text-white shadow-2xs"
+                                            : "text-slate-600 hover:text-slate-900"
+                                        }`}
+                                      >
+                                        Absent
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Timings */}
+                                  <div className="col-span-3 w-full flex items-center justify-center gap-2">
+                                    {isPresent ? (
+                                      <div className="flex items-center gap-1.5 animate-fade-in w-full max-w-[180px]">
+                                        <div className="flex flex-col flex-1">
+                                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 text-center">In</span>
+                                          <input
+                                            type="time"
+                                            value={statusData.timeIn}
+                                            onChange={(e) => setPullOutWorkerStatus(prev => ({
+                                              ...prev,
+                                              [key]: { ...statusData, timeIn: e.target.value }
+                                            }))}
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-1.5 focus:outline-none focus:border-indigo-500 text-[11px] font-bold font-mono text-center text-slate-800 transition-all"
+                                          />
+                                        </div>
+                                        <span className="text-slate-300 font-bold mt-2">:</span>
+                                        <div className="flex flex-col flex-1">
+                                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 text-center">Out</span>
+                                          <input
+                                            type="time"
+                                            value={statusData.timeOut}
+                                            onChange={(e) => setPullOutWorkerStatus(prev => ({
+                                              ...prev,
+                                              [key]: { ...statusData, timeOut: e.target.value }
+                                            }))}
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-1.5 focus:outline-none focus:border-indigo-500 text-[11px] font-bold font-mono text-center text-slate-800 transition-all"
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 font-mono font-medium tracking-wider uppercase bg-slate-100 border border-slate-200/60 px-3 py-1.5 rounded-xl w-full text-center">
+                                        ⚠️ NOT ON SITE
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Error & Success States */}
+                      {pullOutSaveError && (
+                        <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-2.5 text-rose-600 text-xs font-semibold animate-fade-in">
+                          <AlertCircle className="h-4 w-4 shrink-0" />
+                          <span>{pullOutSaveError}</span>
+                        </div>
+                      )}
+
+                      {pullOutSaveSuccess && (
+                        <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center gap-2.5 text-emerald-600 text-xs font-semibold animate-fade-in">
+                          <CheckCircle2 className="h-4 w-4 shrink-0 animate-bounce" />
+                          <span>Relocation attendance audit sheet has been verified and permanently stored.</span>
+                        </div>
+                      )}
+
+                      {/* Action Commit Button */}
+                      <div className="pt-4 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1.5 text-xs text-slate-700 font-bold uppercase tracking-wider">
+                            <MapPin className="h-3.5 w-3.5 text-rose-500 shrink-0" />
+                            <span>Site Location: <span className="text-indigo-600 font-black">{getProjectAndSiteForVerification(selectedPullOutSite)}</span></span>
+                          </div>
+                          <span className="text-[9.5px] text-slate-400 font-mono hidden md:inline-block">
+                            Saved logs instantly populate the dynamic reports and CSV separate databases.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSavePullOutMonitoring}
+                          disabled={isSavingPullOutRecord}
+                          className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md shadow-indigo-100 hover:shadow-indigo-200/60 cursor-pointer transition-all shrink-0 font-sans"
+                        >
+                          {isSavingPullOutRecord ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 animate-spin" />
+                              COMMITTING...
+                            </>
+                          ) : (
+                            <>
+                              <ClipboardCheck className="h-4 w-4" />
+                              VERIFY &amp; SAVE REPORT
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* MONITORING REPORTS DASHBOARD SECTION */}
+            {activePullOutSection === "reports" && (
+              <div className="bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm space-y-6">
+                
+                {/* Reports Setup Bar */}
+                <div className="bg-slate-50 border border-slate-200/60 rounded-2.5xl p-5 flex flex-col xl:flex-row items-center justify-between gap-5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full xl:max-w-4xl">
+                    
+                    {/* Select Report Site */}
+                    <div className="flex flex-col">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                        Select Project Site
+                      </label>
+                      <select
+                        value={reportSelectedSite}
+                        onChange={(e) => setReportSelectedSite(e.target.value)}
+                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-bold text-slate-800 uppercase"
+                      >
+                        <option value="">-- SELECT SITE --</option>
+                        {Array.from(new Set([
+                          ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
+                          ...pullOutMonitoringRecords.map(r => r.site)
+                        ].map(s => s.toUpperCase().trim()))).filter(Boolean).map(site => (
+                          <option key={site} value={site}>{site}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Report Type Selector */}
+                    <div className="flex flex-col">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                        Report Interval
+                      </label>
+                      <div className="grid grid-cols-2 gap-1 p-1 bg-white border border-slate-200 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setActiveReportSubTab("daily")}
+                          className={`py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                            activeReportSubTab === "daily"
+                              ? "bg-indigo-600 text-white shadow-2xs"
+                              : "text-slate-600 hover:text-indigo-600"
+                          }`}
+                        >
+                          Daily
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveReportSubTab("monthly")}
+                          className={`py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                            activeReportSubTab === "monthly"
+                              ? "bg-indigo-600 text-white shadow-2xs"
+                              : "text-slate-600 hover:text-indigo-600"
+                          }`}
+                        >
+                          Monthly
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Date/Month Picker */}
+                    <div className="flex flex-col">
+                      {activeReportSubTab === "daily" ? (
+                        <>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-sans">
+                            Select Date
+                          </label>
+                          <input
+                            type="date"
+                            value={selectedPullOutDate}
+                            onChange={(e) => setSelectedPullOutDate(e.target.value)}
+                            className="bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-bold font-mono text-slate-800"
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-sans">
+                            Select Month
+                          </label>
+                          <input
+                            type="month"
+                            value={reportSelectedMonth}
+                            onChange={(e) => setReportSelectedMonth(e.target.value)}
+                            className="bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-bold font-mono text-slate-800"
+                          />
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Export Options */}
+                  {reportSelectedSite && (
+                    <div className="flex items-center gap-2 w-full xl:w-auto shrink-0 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setReportSelectedSite("")}
+                        className="inline-flex items-center justify-center gap-1.5 px-4.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer font-sans"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" /> Back to Directory
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => exportRelocationReportPDF(
+                          reportSelectedSite,
+                          activeReportSubTab,
+                          activeReportSubTab === "daily" ? selectedPullOutDate : reportSelectedMonth
+                        )}
+                        className="inline-flex items-center justify-center gap-1.5 px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all shadow-md shadow-indigo-100/50 cursor-pointer font-sans"
+                      >
+                        <FileText className="h-3.5 w-3.5" /> Export to PDF File
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Report Content Panel */}
+                {!reportSelectedSite ? (
+                  <div className="space-y-6">
+                    {/* Header + Search Directory */}
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50 border border-slate-200/60 rounded-2.5xl p-5">
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-bold text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                          <Layers className="h-4 w-4 text-indigo-600" /> Relocation Monitoring Directory
+                        </h4>
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          Browse all registered labor relocations and verified attendance summaries organized per site or project.
+                        </p>
+                      </div>
+
+                      {/* Controls: Organize by toggle + Search */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                        {/* Search Input */}
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Search site or project..."
+                            value={reportSearchQuery}
+                            onChange={(e) => setReportSearchQuery(e.target.value)}
+                            className="bg-white border border-slate-200 hover:border-slate-300 rounded-xl py-2 pl-9 pr-4 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all font-sans min-w-[200px]"
+                          />
+                        </div>
+
+                        {/* Organize By Toggle */}
+                        <div className="grid grid-cols-2 gap-1 p-1 bg-white border border-slate-200 rounded-xl">
+                          <button
+                            type="button"
+                            onClick={() => setReportGroupBy("site")}
+                            className={`py-1.5 px-3 rounded-lg text-[9.5px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                              reportGroupBy === "site"
+                                ? "bg-indigo-600 text-white shadow-2xs"
+                                : "text-slate-600 hover:text-indigo-600"
+                            }`}
+                          >
+                            By Site Location
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setReportGroupBy("project")}
+                            className={`py-1.5 px-3 rounded-lg text-[9.5px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                              reportGroupBy === "project"
+                                ? "bg-indigo-600 text-white shadow-2xs"
+                                : "text-slate-600 hover:text-indigo-600"
+                            }`}
+                          >
+                            By Project Code
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Grouping Lists */}
+                    {reportGroupBy === "site" ? (
+                      (() => {
+                        const allSitesList = Array.from(new Set([
+                          ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
+                          ...pullOutMonitoringRecords.map(r => r.site)
+                        ].map(s => s.toUpperCase().trim()))).filter(Boolean);
+
+                        const filteredSites = allSitesList.filter(site => {
+                          if (!reportSearchQuery) return true;
+                          const query = reportSearchQuery.toUpperCase().trim();
+                          const associatedProjects = Array.from(new Set(
+                            submissions.filter(s => s.isPullOut && s.pullOutSite && s.pullOutSite.toUpperCase().trim() === site)
+                              .map(s => s.project?.toUpperCase().trim())
+                              .filter(Boolean)
+                          ));
+                          return site.includes(query) || associatedProjects.some(p => (p as string).includes(query));
+                        });
+
+                        if (filteredSites.length === 0) {
+                          return (
+                            <div className="flex flex-col items-center justify-center text-center py-16 text-slate-400 space-y-3 bg-slate-50/40 rounded-3xl border border-dashed border-slate-200">
+                              <MapPin className="h-8 w-8 text-slate-300 animate-pulse" />
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">No Sites Found</h4>
+                                <p className="text-[10px] text-slate-400 mt-1 max-w-xs mx-auto">
+                                  No destination site matches your search query. Try another keyword or verify your entries.
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {filteredSites.map(site => {
+                              const siteSubmissions = submissions.filter(s => s.isPullOut && s.pullOutSite && s.pullOutSite.toUpperCase().trim() === site);
+                              const siteRecords = pullOutMonitoringRecords.filter(r => r.site.toUpperCase().trim() === site);
+                              
+                              // Calculate metrics
+                              const totalRelocations = siteSubmissions.length;
+                              const verifiedDaysCount = siteRecords.length;
+                              
+                              let totalPresent = 0;
+                              let totalWorkersCount = 0;
+                              siteRecords.forEach(r => {
+                                r.workers?.forEach((w: any) => {
+                                  totalWorkersCount++;
+                                  if (w.status === "Present") totalPresent++;
+                                });
+                              });
+                              const avgPresence = totalWorkersCount > 0 ? Math.round((totalPresent / totalWorkersCount) * 100) : null;
+
+                              const associatedProjects = Array.from(new Set(
+                                siteSubmissions.map(s => s.project?.toUpperCase().trim()).filter(Boolean)
+                              ));
+
+                              return (
+                                <div key={site} className="bg-white border border-slate-200/80 rounded-2.5xl p-5 hover:border-slate-300 transition-all flex flex-col justify-between gap-4 group">
+                                  <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="space-y-1">
+                                        <div className="flex flex-wrap gap-1 items-center">
+                                          {associatedProjects.map(proj => (
+                                            <span key={proj as string} className="text-[9px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-150 px-2 py-0.5 rounded-md uppercase">
+                                              {proj as string}
+                                            </span>
+                                          ))}
+                                          {associatedProjects.length === 0 && (
+                                            <span className="text-[9px] font-black font-mono bg-slate-100 text-slate-500 border border-slate-200 px-2 py-0.5 rounded-md uppercase">
+                                              EXTERNAL SITE
+                                            </span>
+                                          )}
+                                        </div>
+                                        <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight block truncate font-sans group-hover:text-indigo-600 transition-colors">
+                                          {site}
+                                        </h5>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteAllSiteRecords(site);
+                                          }}
+                                          title="Delete all records for this site"
+                                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                        <div className="p-2 bg-slate-50 text-slate-400 rounded-xl group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
+                                          <MapPin className="h-4 w-4" />
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Bento Metrics block inside card */}
+                                    <div className="grid grid-cols-3 gap-2 bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
+                                      <div className="text-center border-r border-slate-200/60 last:border-0">
+                                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Relocated</span>
+                                        <span className="text-[11px] font-black font-mono text-slate-700 block mt-0.5">{totalRelocations}</span>
+                                      </div>
+                                      <div className="text-center border-r border-slate-200/60 last:border-0">
+                                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Verified Days</span>
+                                        <span className="text-[11px] font-black font-mono text-slate-700 block mt-0.5">{verifiedDaysCount}</span>
+                                      </div>
+                                      <div className="text-center last:border-0">
+                                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Avg Presence</span>
+                                        <span className="text-[11px] font-black font-mono text-emerald-600 block mt-0.5">
+                                          {avgPresence !== null ? `${avgPresence}%` : "N/A"}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Quick view button choices */}
+                                  <div className="grid grid-cols-2 gap-2 pt-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setReportSelectedSite(site);
+                                        setActiveReportSubTab("daily");
+                                      }}
+                                      className="inline-flex items-center justify-center gap-1.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer font-sans"
+                                    >
+                                      <Calendar className="h-3 w-3 text-slate-500" /> Daily Report
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setReportSelectedSite(site);
+                                        setActiveReportSubTab("monthly");
+                                      }}
+                                      className="inline-flex items-center justify-center gap-1.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer font-sans"
+                                    >
+                                      <FileSpreadsheet className="h-3 w-3" /> Monthly Report
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      (() => {
+                        const masterProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+                        const submissionsProjects = Array.from(new Set(submissions.map(s => s.project?.toUpperCase().trim()).filter(Boolean)));
+                        const allProjectCodesList = Array.from(new Set([
+                          ...masterProjectCodes.map(pc => pc.code.toUpperCase().trim()),
+                          ...submissionsProjects
+                        ])).filter(Boolean);
+
+                        const projectDetailsList = allProjectCodesList.map(code => {
+                          const meta = masterProjectCodes.find(pc => pc.code.toUpperCase().trim() === code);
+                          const name = meta ? meta.name : "OTHER RELOCATION PROJECT";
+                          const location = meta ? meta.location : "VARIOUS SITES";
+                          return { code, name, location };
+                        });
+
+                        const filteredProjects = projectDetailsList.filter(p => {
+                          if (!reportSearchQuery) return true;
+                          const query = reportSearchQuery.toUpperCase().trim();
+                          return p.code.includes(query) || p.name.toUpperCase().includes(query) || p.location.toUpperCase().includes(query);
+                        });
+
+                        if (filteredProjects.length === 0) {
+                          return (
+                            <div className="flex flex-col items-center justify-center text-center py-16 text-slate-400 space-y-3 bg-slate-50/40 rounded-3xl border border-dashed border-slate-200">
+                              <Briefcase className="h-8 w-8 text-slate-300 animate-pulse" />
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">No Projects Found</h4>
+                                <p className="text-[10px] text-slate-400 mt-1 max-w-xs mx-auto">
+                                  No project code matches your search query. Try another keyword or code.
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {filteredProjects.map(proj => {
+                              const projSubmissions = submissions.filter(s => s.project?.toUpperCase().trim() === proj.code);
+                              
+                              // Find all associated destination sites for relocations linked to this project
+                              const associatedSites = Array.from(new Set([
+                                ...projSubmissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite?.toUpperCase().trim()),
+                                ...pullOutMonitoringRecords.filter(r => r.site.toUpperCase().includes(proj.code)).map(r => r.site.toUpperCase().trim())
+                              ].filter(Boolean)));
+
+                              return (
+                                <div key={proj.code} className="bg-white border border-slate-200/80 rounded-2.5xl p-5 hover:border-slate-300 transition-all flex flex-col justify-between gap-4 group">
+                                  <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="space-y-1">
+                                        <span className="text-[9px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-150 px-2.5 py-0.5 rounded-full uppercase">
+                                          CODE {proj.code}
+                                        </span>
+                                        <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight block truncate font-sans group-hover:text-indigo-600 transition-colors">
+                                          {proj.name}
+                                        </h5>
+                                        <span className="text-[9.5px] font-mono text-slate-400 block truncate">
+                                          Location: {proj.location}
+                                        </span>
+                                      </div>
+                                      <div className="p-2 bg-slate-50 text-slate-400 rounded-xl group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors shrink-0">
+                                        <Briefcase className="h-4 w-4" />
+                                      </div>
+                                    </div>
+
+                                    {/* Associated sites indicator */}
+                                    <div className="space-y-1.5">
+                                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">
+                                        Active Relocation Destination Sites ({associatedSites.length})
+                                      </span>
+                                      {associatedSites.length === 0 ? (
+                                        <span className="text-[9.5px] text-slate-400 font-medium italic block">
+                                          No relocations logged from this project.
+                                        </span>
+                                      ) : (
+                                        <div className="flex flex-wrap gap-1">
+                                          {associatedSites.slice(0, 3).map(site => (
+                                            <span key={site as string} className="inline-flex items-center gap-1 text-[8.5px] font-bold uppercase font-mono bg-slate-50 text-slate-600 border border-slate-200/60 px-2 py-0.5 rounded-md truncate max-w-[150px]" title={site as string}>
+                                              <MapPin className="h-2 w-2 text-rose-500 shrink-0" /> {site as string}
+                                            </span>
+                                          ))}
+                                          {associatedSites.length > 3 && (
+                                            <span className="text-[8.5px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">
+                                              +{associatedSites.length - 3} more
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Quick view options */}
+                                  <div className="pt-1.5">
+                                    {associatedSites.length > 0 ? (
+                                      <div className="flex flex-col gap-1.5">
+                                        <span className="text-[8px] font-black uppercase tracking-widest text-indigo-500/80">Select Site to Inspect:</span>
+                                        <div className="grid grid-cols-1 gap-1">
+                                          {associatedSites.map(site => (
+                                            <div key={site as string} className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100/80 rounded-xl border border-slate-200/50 transition-all text-xs">
+                                              <span className="font-bold text-slate-700 uppercase truncate pr-2 max-w-[180px] text-[10px]">{site as string}</span>
+                                              <div className="flex gap-1">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setReportSelectedSite(site as string);
+                                                    setActiveReportSubTab("daily");
+                                                  }}
+                                                  className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 text-[9px] font-black uppercase rounded-lg transition-all cursor-pointer"
+                                                >
+                                                  Daily
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setReportSelectedSite(site as string);
+                                                    setActiveReportSubTab("monthly");
+                                                  }}
+                                                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[9px] font-black uppercase rounded-lg transition-all cursor-pointer"
+                                                >
+                                                  Monthly
+                                                </button>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="text-center py-2 text-[10px] font-bold text-slate-400 uppercase bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                                        No linked relocations
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()
+                    )}
+                  </div>
+                ) : (
+                  <div id="print-area" className="border border-slate-200/80 rounded-3xl p-6 sm:p-8 space-y-6 bg-white shadow-2xs animate-fade-in relative overflow-hidden">
+                    
+                    {/* Dynamic Background watermark for corporate authenticity */}
+                    <div className="absolute -right-16 -bottom-16 opacity-3 pointer-events-none select-none">
+                      <FileSpreadsheet className="h-96 w-96 text-slate-900" />
+                    </div>
+
+                    {/* Report Brand Header */}
+                    <div className="border-b-2 border-slate-900 pb-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="text-center sm:text-left">
+                        <h2 className="text-base font-black tracking-widest text-slate-900 uppercase leading-tight font-display">
+                          BIN LAHEJ GENERAL MAINTENANCE &amp; CONTRACTING LLC
+                        </h2>
+                        <span className="text-[8px] tracking-widest uppercase font-bold text-slate-400 font-mono mt-1 block">
+                          ESTABLISHED 1993 • DUBAI, UAE • DUO CONTROLLER OFFICE
+                        </span>
+                      </div>
+                      
+                      <div className="shrink-0 border border-slate-200 rounded-xl px-4 py-2 bg-slate-50 text-center">
+                        <span className="text-[9px] font-black text-indigo-600 block tracking-wider font-mono uppercase">
+                          Relocation Audit
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-800 uppercase tracking-tight">
+                          {activeReportSubTab === "daily" ? "Daily Report" : "Monthly Report"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Report Metadata Info Block */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-200/60 text-xs">
+                      <div>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Target Project Site</span>
+                        <strong className="text-slate-800 uppercase font-bold text-[11px] block mt-0.5">{reportSelectedSite}</strong>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Generated For</span>
+                        <strong className="text-slate-800 font-bold text-[11px] font-mono block mt-0.5">
+                          {activeReportSubTab === "daily" ? selectedPullOutDate : reportSelectedMonth}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">System Database Class</span>
+                        <strong className="text-slate-800 uppercase font-bold text-[11px] block mt-0.5 font-sans">Secure Container Local SQL</strong>
+                      </div>
+                      <div>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Export Timestamp</span>
+                        <strong className="text-slate-800 font-mono text-[11px] block mt-0.5">
+                          {new Date().toLocaleString('en-US', { hour12: false })}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* DAILY REPORT CONTENT */}
+                    {activeReportSubTab === "daily" && (() => {
+                      const monitoringRecord = pullOutMonitoringRecords.find(r => 
+                        r.date === selectedPullOutDate && 
+                        r.site.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim()
+                      );
+
+                      const assignedSubmissions = submissions.filter(s => 
+                        s.date === selectedPullOutDate && 
+                        s.isPullOut && 
+                        s.pullOutSite && 
+                        s.pullOutSite.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim()
+                      );
+
+                      if (assignedSubmissions.length === 0) {
+                        return (
+                          <div className="py-12 text-center text-slate-400">
+                            <Info className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                            <p className="text-xs font-semibold">No relocations logged for this site on {selectedPullOutDate}.</p>
+                            <p className="text-[10px] text-slate-400 mt-1">Make sure you have logged pull-outs under the Daily Attendance Form first.</p>
+                          </div>
+                        );
+                      }
+
+                      // Aggregate Statistics
+                      const totalAssigned = assignedSubmissions.length;
+                      let presentCount = 0;
+                      let absentCount = 0;
+
+                      if (monitoringRecord) {
+                        monitoringRecord.workers?.forEach((w: any) => {
+                          if (w.status === "Present") presentCount++;
+                          else absentCount++;
+                        });
+                      } else {
+                        // Default if verified record is not yet completed
+                        presentCount = totalAssigned;
+                      }
+
+                      const presentRate = totalAssigned > 0 ? Math.round((presentCount / totalAssigned) * 100) : 0;
+
+                      return (
+                        <div className="space-y-6 animate-fade-in">
+                          {/* Metrics Bento Box Grid */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                            <div className="bg-slate-50 border border-slate-200/60 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Total Relocated</span>
+                              <span className="text-lg font-black font-mono text-slate-800 block mt-1">{totalAssigned}</span>
+                              <span className="text-[8px] text-slate-400 font-mono mt-0.5 block uppercase">Workers Assigned</span>
+                            </div>
+                            
+                            <div className="bg-emerald-50/50 border border-emerald-100 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider block">Present on Site</span>
+                              <span className="text-lg font-black font-mono text-emerald-700 block mt-1">{presentCount}</span>
+                              <span className="text-[8px] text-emerald-500 font-mono mt-0.5 block uppercase">Verified Present</span>
+                            </div>
+
+                            <div className="bg-rose-50/50 border border-rose-100 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-rose-600 uppercase tracking-wider block">No-Shows</span>
+                              <span className="text-lg font-black font-mono text-rose-700 block mt-1">{absentCount}</span>
+                              <span className="text-[8px] text-rose-500 font-mono mt-0.5 block uppercase">Not Present</span>
+                            </div>
+
+                            <div className="bg-indigo-50/50 border border-indigo-100 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-indigo-600 uppercase tracking-wider block">Presence Rate</span>
+                              <span className="text-lg font-black font-mono text-indigo-700 block mt-1">{presentRate}%</span>
+                              <span className="text-[8px] text-indigo-500 font-mono mt-0.5 block uppercase">Attendance Score</span>
+                            </div>
+                          </div>
+
+                          {/* Verified Record Warning/Badge */}
+                          {!monitoringRecord && (
+                            <div className="p-3.5 bg-amber-50 border border-amber-100 rounded-2xl text-[10.5px] text-amber-700 font-medium flex items-center gap-2">
+                              <AlertCircle className="h-4 w-4 shrink-0" />
+                              <span>
+                                <strong>⚠️ DRAFT DATA:</strong> This relocation record has NOT been verified in the Verification Portal yet. Timings are set to standard defaults.
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Table details */}
+                          {(() => {
+                            const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                            
+                            const listToRender = monitoringRecord && monitoringRecord.workers && monitoringRecord.workers.length > 0
+                              ? monitoringRecord.workers
+                              : assignedSubmissions.map(w => {
+                                  const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+                                  const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+                                  return {
+                                    laborCode: resolvedCode,
+                                    laborsName: w.laborsName,
+                                    status: "Present",
+                                    timeIn: "08:00",
+                                    timeOut: "17:00",
+                                    pullOutReason: w.pullOutReason || "NOT SPECIFIED"
+                                  };
+                                });
+
+                            return (
+                              <div className="space-y-3.5">
+                                {selectedReportLaborNames.length > 0 && (
+                                  <div className="flex items-center justify-between p-3.5 bg-rose-50 border border-rose-150 rounded-2xl text-xs font-semibold text-rose-700 animate-in fade-in slide-in-from-top-4 duration-200">
+                                    <div className="flex items-center gap-2">
+                                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white font-mono animate-pulse">
+                                        {selectedReportLaborNames.length}
+                                      </span>
+                                      <span>Relocation worker record(s) selected for deletion.</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteDailyWorkers(selectedReportLaborNames)}
+                                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all shadow-md shadow-rose-100 cursor-pointer font-sans"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" /> Delete Selected ({selectedReportLaborNames.length})
+                                    </button>
+                                  </div>
+                                )}
+
+                                <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-3xs bg-white">
+                                  <table className="w-full text-left border-collapse text-xs">
+                                    <thead>
+                                      <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                        <th className="py-3 px-4 text-center w-12">
+                                          <input
+                                            type="checkbox"
+                                            checked={listToRender.length > 0 && selectedReportLaborNames.length === listToRender.length}
+                                            onChange={(e) => {
+                                              if (e.target.checked) {
+                                                setSelectedReportLaborNames(listToRender.map((w: any) => w.laborsName));
+                                              } else {
+                                                setSelectedReportLaborNames([]);
+                                              }
+                                            }}
+                                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-3.5 w-3.5"
+                                          />
+                                        </th>
+                                        <th className="py-3 px-4 text-center w-12">S.No</th>
+                                        <th className="py-3 px-4 w-28">Labor Code</th>
+                                        <th className="py-3 px-4">Labor Name</th>
+                                        <th className="py-3 px-4 text-center w-28">Audit Status</th>
+                                        <th className="py-3 px-4 text-center w-28">Time In</th>
+                                        <th className="py-3 px-4 text-center w-28">Time Out</th>
+                                        <th className="py-3 px-4">Relocation Reason</th>
+                                        <th className="py-3 px-4 text-center w-16">Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {listToRender.map((w: any, index: number) => {
+                                        const status = w.status || "Present";
+                                        const isPresent = status === "Present";
+                                        const timeIn = isPresent ? (w.timeIn || "08:00") : "N/A";
+                                        const timeOut = isPresent ? (w.timeOut || "17:00") : "N/A";
+                                        
+                                        const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+                                        const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+                                        const isChecked = selectedReportLaborNames.includes(w.laborsName);
+
+                                        return (
+                                          <tr key={index} className={`hover:bg-slate-50/50 transition-colors ${isChecked ? "bg-rose-50/20" : ""}`}>
+                                            <td className="py-3 px-4 text-center">
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={(e) => {
+                                                  if (e.target.checked) {
+                                                    setSelectedReportLaborNames(prev => [...prev, w.laborsName]);
+                                                  } else {
+                                                    setSelectedReportLaborNames(prev => prev.filter(name => name !== w.laborsName));
+                                                  }
+                                                }}
+                                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-3.5 w-3.5"
+                                              />
+                                            </td>
+                                            <td className="py-3 px-4 text-center font-mono text-slate-400 font-bold">{index + 1}</td>
+                                            <td className="py-3 px-4 font-mono font-bold text-slate-600 uppercase">{resolvedCode}</td>
+                                            <td className="py-3 px-4 font-bold text-slate-800 uppercase tracking-tight">{w.laborsName}</td>
+                                            <td className="py-3 px-4 text-center">
+                                              <span className={`inline-block px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase font-mono tracking-wider ${
+                                                isPresent
+                                                  ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
+                                                  : "bg-rose-50 text-rose-600 border border-rose-100"
+                                              }`}>
+                                                {status}
+                                              </span>
+                                            </td>
+                                            <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">{timeIn}</td>
+                                            <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">{timeOut}</td>
+                                            <td className="py-3 px-4 text-slate-500 uppercase font-medium max-w-xs truncate" title={w.pullOutReason || w.pullOutReason}>
+                                              {w.pullOutReason || "NOT SPECIFIED"}
+                                            </td>
+                                            <td className="py-3 px-4 text-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteDailyWorkers([w.laborsName])}
+                                                title="Delete this relocation record"
+                                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer inline-flex items-center justify-center"
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      );
+                    })()}
+
+                    {/* MONTHLY REPORT CONTENT */}
+                    {activeReportSubTab === "monthly" && (() => {
+                      // Filter monitoring records of this site for the selected month
+                      const monthRecords = pullOutMonitoringRecords.filter(r => 
+                        r.date.startsWith(reportSelectedMonth) &&
+                        r.site.toUpperCase().trim() === reportSelectedSite.toUpperCase().trim()
+                      );
+
+                      // Sort by date ascending
+                      monthRecords.sort((a, b) => a.date.localeCompare(b.date));
+
+                      if (monthRecords.length === 0) {
+                        return (
+                          <div className="py-12 text-center text-slate-400">
+                            <Info className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                            <p className="text-xs font-semibold">No verified pull-out attendance records found for this site in month {reportSelectedMonth}.</p>
+                            <p className="text-[10px] text-slate-400 mt-1">Attendance records must be audited and saved in the Verification Portal to compile monthly data sets.</p>
+                          </div>
+                        );
+                      }
+
+                      // Compute monthly metrics
+                      const totalDaysWithPullOuts = monthRecords.length;
+                      let totalPresentManDays = 0;
+                      let totalAbsentManDays = 0;
+                      let totalRelocationsCount = 0;
+
+                      monthRecords.forEach(r => {
+                        r.workers?.forEach((w: any) => {
+                          totalRelocationsCount++;
+                          if (w.status === "Present") totalPresentManDays++;
+                          else totalAbsentManDays++;
+                        });
+                      });
+
+                      const averagePresenceRate = totalRelocationsCount > 0 
+                        ? Math.round((totalPresentManDays / totalRelocationsCount) * 100) 
+                        : 0;
+
+                      return (
+                        <div className="space-y-6 animate-fade-in">
+                          {/* Metrics Bento Box Grid */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                            <div className="bg-slate-50 border border-slate-200/60 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Audited Days</span>
+                              <span className="text-lg font-black font-mono text-slate-800 block mt-1">{totalDaysWithPullOuts}</span>
+                              <span className="text-[8px] text-slate-400 font-mono mt-0.5 block uppercase">Days with Relocations</span>
+                            </div>
+                            
+                            <div className="bg-slate-50 border border-slate-200/60 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Assigned Man-Days</span>
+                              <span className="text-lg font-black font-mono text-slate-800 block mt-1">{totalRelocationsCount}</span>
+                              <span className="text-[8px] text-slate-400 font-mono mt-0.5 block uppercase">Total Pull-Outs</span>
+                            </div>
+
+                            <div className="bg-emerald-50/50 border border-emerald-100 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider block">Present Man-Days</span>
+                              <span className="text-lg font-black font-mono text-emerald-700 block mt-1">{totalPresentManDays}</span>
+                              <span className="text-[8px] text-emerald-500 font-mono mt-0.5 block uppercase">Verified Intake</span>
+                            </div>
+
+                            <div className="bg-indigo-50/50 border border-indigo-100 p-4.5 rounded-2xl text-center">
+                              <span className="text-[9px] font-bold text-indigo-600 uppercase tracking-wider block">Avg Presence Rate</span>
+                              <span className="text-lg font-black font-mono text-indigo-700 block mt-1">{averagePresenceRate}%</span>
+                              <span className="text-[8px] text-indigo-500 font-mono mt-0.5 block uppercase">Monthly Avg</span>
+                            </div>
+                          </div>
+
+                          {/* Table calendar summary */}
+                          <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-3xs">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                  <th className="py-3 px-4 text-center w-12">S.No</th>
+                                  <th className="py-3 px-4 w-32">Date</th>
+                                  <th className="py-3 px-4 text-center w-28">Assigned</th>
+                                  <th className="py-3 px-4 text-center w-28">Present</th>
+                                  <th className="py-3 px-4 text-center w-28">No-Show</th>
+                                  <th className="py-3 px-4 text-center w-28">Presence %</th>
+                                  <th className="py-3 px-4">Relocated Workers Roster &amp; Hours</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {monthRecords.map((record, index) => {
+                                  const dayTotal = record.workers?.length || 0;
+                                  let dayPresent = 0;
+                                  let dayAbsent = 0;
+
+                                  record.workers?.forEach((w: any) => {
+                                    if (w.status === "Present") dayPresent++;
+                                    else dayAbsent++;
+                                  });
+
+                                  const dayRate = dayTotal > 0 ? Math.round((dayPresent / dayTotal) * 100) : 0;
+
+                                  const formattedDate = (() => {
+                                    try {
+                                      const d = new Date(record.date);
+                                      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                                    } catch {
+                                      return record.date;
+                                    }
+                                  })();
+
+                                  return (
+                                    <tr key={record.id} className="hover:bg-slate-50/50 transition-colors">
+                                      <td className="py-3 px-4 text-center font-mono text-slate-400 font-bold">{index + 1}</td>
+                                      <td className="py-3 px-4 font-mono font-bold text-slate-800 uppercase">{formattedDate}</td>
+                                      <td className="py-3 px-4 text-center font-mono font-semibold text-slate-700">{dayTotal}</td>
+                                      <td className="py-3 px-4 text-center font-mono font-semibold text-emerald-600">{dayPresent}</td>
+                                      <td className="py-3 px-4 text-center font-mono font-semibold text-rose-500">{dayAbsent}</td>
+                                      <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">{dayRate}%</td>
+                                      <td className="py-3 px-4">
+                                        <div className="flex flex-wrap gap-1.5 max-w-lg">
+                                          {record.workers?.map((w: any) => {
+                                            const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                                            const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+                                            const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+                                            return (
+                                              <span
+                                                key={resolvedCode + "-" + w.laborsName}
+                                                className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase font-mono px-2 py-0.5 rounded-full border ${
+                                                  w.status === "Present"
+                                                    ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                                                    : "bg-rose-50 text-rose-500 border-rose-100"
+                                                }`}
+                                                title={`${w.laborsName} ${w.status === "Present" ? `(${w.timeIn} - ${w.timeOut})` : '(No-Show)'}`}
+                                              >
+                                                {resolvedCode}
+                                                {w.status === "Present" && (
+                                                  <span className="text-[8px] font-normal text-slate-400">
+                                                    ({w.timeIn})
+                                                  </span>
+                                                )}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Standard Sign-Off Authorization Footer */}
+                    <div className="pt-10 grid grid-cols-2 gap-12 text-center text-slate-400 text-[10px] font-mono tracking-wider uppercase">
+                      <div className="space-y-12">
+                        <div className="w-40 border-b border-slate-300 mx-auto"></div>
+                        <span>Prepared By: Site Engineer / Document Controller</span>
+                      </div>
+                      <div className="space-y-12">
+                        <div className="w-40 border-b border-slate-300 mx-auto"></div>
+                        <span>Approved By: Project Manager / Bin Lahej Auditing</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ADMIN DATABASE VIEW */}
         {currentView === "admin" && (
           <div id="admin-container" className="space-y-6">
             {!isAuthenticated && isPasscodeConfigured === null && (
@@ -3989,15 +6218,43 @@ export default function App() {
 
                                 {/* ATTENDANCE STATUS */}
                                 <td className="py-3.5 px-4 text-center border-r border-slate-200">
-                                  <span className={`px-2 py-1 rounded-full text-[10px] font-extrabold uppercase whitespace-nowrap ${
-                                    (s.attendanceStatus || "Present") === "Present"
-                                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                                      : (s.attendanceStatus || "Present") === "Absent"
-                                      ? "bg-rose-100 text-rose-800 border border-rose-200"
-                                      : "bg-amber-100 text-amber-800 border border-amber-200"
-                                  }`}>
-                                    {s.attendanceStatus || "Present"}
-                                  </span>
+                                  <div className="flex flex-col items-center justify-center gap-1.5">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase whitespace-nowrap ${
+                                      s.isPullOut
+                                        ? "bg-amber-100 text-amber-800 border border-amber-200 shadow-sm"
+                                        : (s.attendanceStatus || "Present") === "Present"
+                                        ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                        : (s.attendanceStatus || "Present") === "Absent"
+                                        ? "bg-rose-100 text-rose-800 border border-rose-200"
+                                        : "bg-amber-100 text-amber-800 border border-amber-200"
+                                    }`}>
+                                      {s.isPullOut ? "Pull Out" : (s.attendanceStatus || "Present")}
+                                    </span>
+                                    {s.isPullOut && (s.pullOutSite || s.pullOutTime || s.pullOutReason) && (
+                                      <div className="text-[10px] text-amber-700 bg-amber-50/50 p-1.5 rounded border border-amber-100/50 text-left max-w-[180px] leading-tight shadow-2xs">
+                                        {s.pullOutSite && <div><span className="font-bold">To:</span> {s.pullOutSite}</div>}
+                                        {s.pullOutTime && <div><span className="font-bold">Time:</span> {s.pullOutTime}</div>}
+                                        {s.pullOutReason && <div className="italic text-slate-500 mt-0.5">{s.pullOutReason}</div>}
+                                      </div>
+                                    )}
+                                    {!s.isPullOut && (s.attendanceStatus || "Present") === "Absent" && s.absentReason && (
+                                      <div className="text-[10px] text-rose-700 bg-rose-50/50 p-1.5 rounded border border-rose-100/50 text-left max-w-[180px] leading-tight shadow-2xs">
+                                        <div className="font-bold">{s.absentReason}</div>
+                                        {s.absentReason === "Others" && s.absentReasonOther && (
+                                          <div className="italic text-slate-500 mt-0.5">{s.absentReasonOther}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                    {!s.isPullOut && (s.attendanceStatus || "Present") === "Under Time" && (s.underTimeTime || s.underTimeReason) && (
+                                      <div className="text-[10px] text-amber-700 bg-amber-50/50 p-1.5 rounded border border-amber-100/50 text-left max-w-[180px] leading-tight shadow-2xs">
+                                        {s.underTimeTime && <div><span className="font-bold">Time:</span> {s.underTimeTime}</div>}
+                                        {s.underTimeReason && <div><span className="font-bold">Reason:</span> {s.underTimeReason}</div>}
+                                        {s.underTimeReason === "Others" && s.underTimeReasonOther && (
+                                          <div className="italic text-slate-500 mt-0.5">{s.underTimeReasonOther}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
 
                                 {/* DELETION ACTION */}
@@ -5892,15 +8149,43 @@ export default function App() {
                                   {r.reassignedTask}
                                 </td>
                                 <td className="py-2.5 px-4 text-center">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase whitespace-nowrap inline-block ${
-                                    (r.attendanceStatus || "Present") === "Present"
-                                      ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                                      : (r.attendanceStatus || "Present") === "Absent"
-                                      ? "bg-rose-100 text-rose-800 border border-rose-200"
-                                      : "bg-amber-100 text-amber-800 border border-amber-200"
-                                  }`}>
-                                    {r.attendanceStatus || "Present"}
-                                  </span>
+                                  <div className="flex flex-col items-center justify-center gap-1.5">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase whitespace-nowrap inline-block ${
+                                      r.isPullOut
+                                        ? "bg-amber-100 text-amber-800 border border-amber-200 shadow-sm"
+                                        : (r.attendanceStatus || "Present") === "Present"
+                                        ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                        : (r.attendanceStatus || "Present") === "Absent"
+                                        ? "bg-rose-100 text-rose-800 border border-rose-200"
+                                        : "bg-amber-100 text-amber-800 border border-amber-200"
+                                    }`}>
+                                      {r.isPullOut ? "Pull Out" : (r.attendanceStatus || "Present")}
+                                    </span>
+                                    {r.isPullOut && (r.pullOutSite || r.pullOutTime || r.pullOutReason) && (
+                                      <div className="text-[10px] text-amber-700 bg-amber-50/50 p-1.5 rounded border border-amber-100/50 text-left max-w-[180px] leading-tight shadow-2xs">
+                                        {r.pullOutSite && <div><span className="font-bold">To:</span> {r.pullOutSite}</div>}
+                                        {r.pullOutTime && <div><span className="font-bold">Time:</span> {r.pullOutTime}</div>}
+                                        {r.pullOutReason && <div className="italic text-slate-500 mt-0.5">{r.pullOutReason}</div>}
+                                      </div>
+                                    )}
+                                    {!r.isPullOut && (r.attendanceStatus || "Present") === "Absent" && r.absentReason && (
+                                      <div className="text-[10px] text-rose-700 bg-rose-50/50 p-1.5 rounded border border-rose-100/50 text-left max-w-[180px] leading-tight shadow-2xs">
+                                        <div className="font-bold">{r.absentReason}</div>
+                                        {r.absentReason === "Others" && r.absentReasonOther && (
+                                          <div className="italic text-slate-500 mt-0.5">{r.absentReasonOther}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                    {!r.isPullOut && (r.attendanceStatus || "Present") === "Under Time" && (r.underTimeTime || r.underTimeReason) && (
+                                      <div className="text-[10px] text-amber-700 bg-amber-50/50 p-1.5 rounded border border-amber-100/50 text-left max-w-[180px] leading-tight shadow-2xs">
+                                        {r.underTimeTime && <div><span className="font-bold">Time:</span> {r.underTimeTime}</div>}
+                                        {r.underTimeReason && <div><span className="font-bold">Reason:</span> {r.underTimeReason}</div>}
+                                        {r.underTimeReason === "Others" && r.underTimeReasonOther && (
+                                          <div className="italic text-slate-500 mt-0.5">{r.underTimeReasonOther}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             ));

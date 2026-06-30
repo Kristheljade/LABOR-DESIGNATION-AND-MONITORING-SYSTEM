@@ -138,6 +138,62 @@ async function safeWriteSubmissions(submissions: any[]) {
   await safeWriteFile(DATA_FILE, JSON.stringify(submissions, null, 2));
 }
 
+const MONITORING_FILE = path.join(process.cwd(), "pull_out_monitoring.json");
+
+// Helper to safely write pull-out monitoring records atomically
+async function safeWriteMonitoring(records: any[]) {
+  await safeWriteFile(MONITORING_FILE, JSON.stringify(records, null, 2));
+}
+
+// Helper to safely read and parse local pull-out monitoring
+async function readLocalMonitoring(): Promise<any[]> {
+  try {
+    if (!existsSync(MONITORING_FILE)) {
+      return [];
+    }
+    const data = await fs.readFile(MONITORING_FILE, "utf-8");
+    return JSON.parse(data || "[]");
+  } catch (error) {
+    console.error("Error reading or parsing local pull-out monitoring backup:", error);
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        const colRef = collection(firestoreDb, "pull_out_monitoring");
+        const querySnapshot = await getDocs(colRef);
+        const list: any[] = [];
+        querySnapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() });
+        });
+        await safeWriteMonitoring(list);
+        return list;
+      }
+    } catch (fireErr) {
+      handleFirebaseError("readLocalMonitoring - self-healing", fireErr);
+    }
+    return [];
+  }
+}
+
+// Helper to read pull-out monitoring
+async function getMonitoringRecords(): Promise<any[]> {
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const colRef = collection(firestoreDb, "pull_out_monitoring");
+      const querySnapshot = await getDocs(colRef);
+      const list: any[] = [];
+      querySnapshot.forEach((doc) => {
+        list.push({ id: doc.id, ...doc.data() });
+      });
+      await safeWriteMonitoring(list);
+      return list;
+    }
+  } catch (error) {
+    handleFirebaseError("getMonitoringRecords", error);
+  }
+  return readLocalMonitoring();
+}
+
 // Helper to safely read and parse local submissions
 async function readLocalSubmissions(): Promise<any[]> {
   try {
@@ -795,7 +851,16 @@ app.post("/api/submissions", async (req, res) => {
       noOfLaborSubcontractor,
       equipment,
       remarks,
-      images
+      images,
+      isPullOut,
+      absentReason,
+      absentReasonOther,
+      underTimeTime,
+      underTimeReason,
+      underTimeReasonOther,
+      pullOutTime,
+      pullOutSite,
+      pullOutReason
     } = req.body;
     
     const isMonitoringOnly = !!(activityName && activityName.trim());
@@ -850,6 +915,15 @@ app.post("/api/submissions", async (req, res) => {
       equipment: equipment || "",
       remarks: remarks || "",
       images: images || [],
+      isPullOut: isPullOut !== undefined ? isPullOut : false,
+      absentReason: absentReason || "",
+      absentReasonOther: absentReasonOther || "",
+      underTimeTime: underTimeTime || "",
+      underTimeReason: underTimeReason || "",
+      underTimeReasonOther: underTimeReasonOther || "",
+      pullOutTime: pullOutTime || "",
+      pullOutSite: pullOutSite || "",
+      pullOutReason: pullOutReason || "",
       createdAt: new Date().toISOString()
     };
 
@@ -904,7 +978,16 @@ app.put("/api/submissions/:id", async (req, res) => {
       noOfLaborSubcontractor,
       equipment,
       remarks,
-      images
+      images,
+      isPullOut,
+      absentReason,
+      absentReasonOther,
+      underTimeTime,
+      underTimeReason,
+      underTimeReasonOther,
+      pullOutTime,
+      pullOutSite,
+      pullOutReason
     } = req.body;
 
     let submissions = await readLocalSubmissions();
@@ -968,6 +1051,15 @@ app.put("/api/submissions/:id", async (req, res) => {
         equipment: equipment !== undefined ? equipment : originalRecord.equipment,
         remarks: remarks !== undefined ? remarks : originalRecord.remarks,
         images: images !== undefined ? images : originalRecord.images,
+        isPullOut: isPullOut !== undefined ? isPullOut : originalRecord.isPullOut,
+        absentReason: absentReason !== undefined ? absentReason : originalRecord.absentReason,
+        absentReasonOther: absentReasonOther !== undefined ? absentReasonOther : originalRecord.absentReasonOther,
+        underTimeTime: underTimeTime !== undefined ? underTimeTime : originalRecord.underTimeTime,
+        underTimeReason: underTimeReason !== undefined ? underTimeReason : originalRecord.underTimeReason,
+        underTimeReasonOther: underTimeReasonOther !== undefined ? underTimeReasonOther : originalRecord.underTimeReasonOther,
+        pullOutTime: pullOutTime !== undefined ? pullOutTime : originalRecord.pullOutTime,
+        pullOutSite: pullOutSite !== undefined ? pullOutSite : originalRecord.pullOutSite,
+        pullOutReason: pullOutReason !== undefined ? pullOutReason : originalRecord.pullOutReason,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1014,6 +1106,15 @@ app.put("/api/submissions/:id", async (req, res) => {
       equipment: equipment !== undefined ? equipment : submissions[index].equipment,
       remarks: remarks !== undefined ? remarks : submissions[index].remarks,
       images: images !== undefined ? images : submissions[index].images,
+      isPullOut: isPullOut !== undefined ? isPullOut : submissions[index].isPullOut,
+      absentReason: absentReason !== undefined ? absentReason : submissions[index].absentReason,
+      absentReasonOther: absentReasonOther !== undefined ? absentReasonOther : submissions[index].absentReasonOther,
+      underTimeTime: underTimeTime !== undefined ? underTimeTime : submissions[index].underTimeTime,
+      underTimeReason: underTimeReason !== undefined ? underTimeReason : submissions[index].underTimeReason,
+      underTimeReasonOther: underTimeReasonOther !== undefined ? underTimeReasonOther : submissions[index].underTimeReasonOther,
+      pullOutTime: pullOutTime !== undefined ? pullOutTime : submissions[index].pullOutTime,
+      pullOutSite: pullOutSite !== undefined ? pullOutSite : submissions[index].pullOutSite,
+      pullOutReason: pullOutReason !== undefined ? pullOutReason : submissions[index].pullOutReason,
       updatedAt: new Date().toISOString()
     };
 
@@ -1087,6 +1188,98 @@ app.delete("/api/submissions/:id", requireAdmin, async (req, res) => {
 
     // Refresh the daily/monthly separate files
     await syncSeparateFiles();
+
+    res.json({ success: true, deletedFromFirebase: firebaseSuccess });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all pull-out monitoring records
+app.get("/api/pull-out-monitoring", async (req, res) => {
+  try {
+    const records = await getMonitoringRecords();
+    // Sort by date descending
+    records.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    res.json(records);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save or update pull-out monitoring record
+app.post("/api/pull-out-monitoring", async (req, res) => {
+  try {
+    const { id, date, site, workers } = req.body;
+    if (!date || !site || !workers || !Array.isArray(workers)) {
+      return res.status(400).json({ error: "Date, Site, and Workers are required." });
+    }
+
+    let records = await readLocalMonitoring();
+    const finalId = id || (Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6));
+
+    // Find if there is an existing record for this date and site
+    const index = records.findIndex((r: any) => r.date === date && r.site === site);
+
+    const newRecord = {
+      id: finalId,
+      date,
+      site,
+      workers,
+      createdAt: new Date().toISOString()
+    };
+
+    if (index !== -1) {
+      records[index] = newRecord;
+    } else {
+      records.push(newRecord);
+    }
+
+    // Save to Firebase Firestore
+    let firebaseSuccess = false;
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, "pull_out_monitoring", finalId), newRecord);
+        firebaseSuccess = true;
+        console.log(`Successfully stored pull-out monitoring record ${finalId} in Firestore.`);
+      }
+    } catch (error) {
+      handleFirebaseError("createPullOutMonitoring", error);
+    }
+
+    // Save locally
+    await safeWriteMonitoring(records);
+
+    res.status(201).json({ success: true, entry: newRecord, storedInFirebase: firebaseSuccess });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a pull-out monitoring record
+app.delete("/api/pull-out-monitoring/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let records = await readLocalMonitoring();
+    records = records.filter((r: any) => r.id !== id);
+
+    // Save locally
+    await safeWriteMonitoring(records);
+
+    // Delete from Firebase Firestore
+    let firebaseSuccess = false;
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        await deleteDoc(doc(firestoreDb, "pull_out_monitoring", id));
+        firebaseSuccess = true;
+        console.log(`Successfully deleted pull-out monitoring record ${id} from Firestore.`);
+      }
+    } catch (error) {
+      handleFirebaseError("deletePullOutMonitoring", error);
+    }
 
     res.json({ success: true, deletedFromFirebase: firebaseSuccess });
   } catch (error: any) {

@@ -40,3 +40,34 @@ body {
   box-shadow: 0 0 0 4px rgba(51, 65, 85, 0.05);
 }
 
+/* Print layout optimizations for pristine PDF/corporate reports */
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+  header,
+  footer,
+  nav,
+  button,
+  select,
+  input,
+  span.no-print,
+  #brand-header,
+  div[id="pullout-portal-container"] > div:first-child,
+  .lg:col-span-4,
+  .xl:flex-row,
+  .py-2.5 {
+    display: none !important;
+  }
+  #print-area {
+    width: 100% !important;
+    max-width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    position: relative !important;
+  }
+}
+

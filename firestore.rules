@@ -13,5 +13,8 @@ service cloud.firestore {
     match /settings/{id} {
       allow read, write: if true;
     }
+    match /pull_out_monitoring/{id} {
+      allow read, write: if true;
+    }
   }
 }
