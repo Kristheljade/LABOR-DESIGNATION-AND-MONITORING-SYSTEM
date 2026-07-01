@@ -482,6 +482,15 @@ export default function App() {
   const [pullOutSaveSuccess, setPullOutSaveSuccess] = useState<boolean>(false);
   const [pullOutSaveError, setPullOutSaveError] = useState<string>("");
 
+  const lastLoadedPullOutKeyRef = useRef<string>("");
+  const shouldForceSyncRef = useRef<boolean>(false);
+  const pullOutWorkerStatusRef = useRef<any>({});
+
+  // Sync ref to avoid stale closures inside useEffect
+  useEffect(() => {
+    pullOutWorkerStatusRef.current = pullOutWorkerStatus;
+  }, [pullOutWorkerStatus]);
+
   // Pull-Out Reporting States
   const [reportSelectedSite, setReportSelectedSite] = useState<string>("");
   const [reportSelectedMonth, setReportSelectedMonth] = useState<string>(() => {
@@ -878,6 +887,16 @@ export default function App() {
   // Sync pull-out worker inputs when selection changes or records update
   useEffect(() => {
     if (!selectedPullOutDate || !selectedPullOutSite) return;
+
+    const currentKey = `${selectedPullOutDate}-${selectedPullOutSite.toUpperCase().trim()}`;
+    const keyChanged = lastLoadedPullOutKeyRef.current !== currentKey;
+    const forceSync = shouldForceSyncRef.current;
+
+    if (forceSync) {
+      shouldForceSyncRef.current = false;
+    }
+
+    lastLoadedPullOutKeyRef.current = currentKey;
     
     const existing = pullOutMonitoringRecords.find(r => 
       r.date === selectedPullOutDate && 
@@ -899,6 +918,12 @@ export default function App() {
       const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
       const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
       const key = `${resolvedCode}-${w.laborsName}`;
+      
+      // If the selection did not change, and we are not forcing a sync, preserve the user's existing input
+      if (!keyChanged && !forceSync && pullOutWorkerStatusRef.current[key]) {
+        initialStatus[key] = pullOutWorkerStatusRef.current[key];
+        return;
+      }
       
       // Look for this worker in the saved monitoring record
       const savedWorker = existing?.workers?.find((sw: any) => 
@@ -1437,6 +1462,7 @@ export default function App() {
 
       if (res.ok) {
         setPullOutSaveSuccess(true);
+        shouldForceSyncRef.current = true;
         // Refresh records list
         await fetchPullOutMonitoring();
         setTimeout(() => setPullOutSaveSuccess(false), 3000);
@@ -1507,6 +1533,7 @@ export default function App() {
           }
 
           // 3. Refresh and update state
+          shouldForceSyncRef.current = true;
           await fetchSubmissions();
           await fetchPullOutMonitoring();
           setSelectedReportLaborNames([]);
