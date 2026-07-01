@@ -185,8 +185,62 @@ async function getMonitoringRecords(): Promise<any[]> {
       querySnapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() });
       });
-      await safeWriteMonitoring(list);
-      return list;
+
+      // Self-healing: Find and clean up any duplicate records for the same date and site in Firestore
+      const uniqueMap = new Map<string, any>();
+      const duplicatesToDelete: string[] = [];
+
+      // Sort by createdAt ascending so the latest overwrites older ones in our map
+      list.sort((a: any, b: any) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeA - timeB;
+      });
+
+      list.forEach((rec) => {
+        const key = `${rec.date}_${(rec.site || "").toUpperCase().trim()}`;
+        if (uniqueMap.has(key)) {
+          const olderRec = uniqueMap.get(key);
+          duplicatesToDelete.push(olderRec.id);
+        }
+        uniqueMap.set(key, rec);
+      });
+
+      if (duplicatesToDelete.length > 0) {
+        console.log(`Self-healing: Found ${duplicatesToDelete.length} duplicate pull-out monitoring records in Firestore. Cleaning up...`);
+        for (const dupId of duplicatesToDelete) {
+          try {
+            await deleteDoc(doc(firestoreDb, "pull_out_monitoring", dupId));
+            console.log(`Deleted duplicate pull-out monitoring document: ${dupId}`);
+          } catch (delErr) {
+            console.error(`Failed to delete duplicate document ${dupId}:`, delErr);
+          }
+        }
+      }
+
+      const cleanList = Array.from(uniqueMap.values());
+
+      // Merge with local records so we don't lose anything that failed to write to Firestore
+      let local: any[] = [];
+      try {
+        if (existsSync(MONITORING_FILE)) {
+          const localData = await fs.readFile(MONITORING_FILE, "utf-8");
+          local = JSON.parse(localData || "[]");
+        }
+      } catch (e) {
+        console.error("Error reading local monitoring during sync:", e);
+      }
+
+      const merged = [...cleanList];
+      local.forEach((localRec: any) => {
+        const exists = cleanList.some((fRec: any) => fRec.id === localRec.id || (fRec.date === localRec.date && (fRec.site || "").toUpperCase().trim() === (localRec.site || "").toUpperCase().trim()));
+        if (!exists) {
+          merged.push(localRec);
+        }
+      });
+
+      await safeWriteMonitoring(merged);
+      return merged;
     }
   } catch (error) {
     handleFirebaseError("getMonitoringRecords", error);
@@ -236,9 +290,25 @@ async function getSubmissions(): Promise<any[]> {
         list.push({ id: doc.id, ...doc.data() });
       });
 
+      // Merge with local records to prevent wiping out offline/local-only submissions
+      let local: any[] = [];
+      try {
+        local = await readLocalSubmissions();
+      } catch (e) {
+        console.error("Error reading local submissions during sync:", e);
+      }
+
+      const merged = [...list];
+      local.forEach((localRec: any) => {
+        const exists = list.some((fRec: any) => fRec.id === localRec.id);
+        if (!exists) {
+          merged.push(localRec);
+        }
+      });
+
       // Cache locally to keep offline fallback sync atomically
-      await safeWriteSubmissions(list);
-      return list;
+      await safeWriteSubmissions(merged);
+      return merged;
     }
   } catch (error) {
     handleFirebaseError("getSubmissions", error);
@@ -1216,10 +1286,15 @@ app.post("/api/pull-out-monitoring", async (req, res) => {
     }
 
     let records = await readLocalMonitoring();
-    const finalId = id || (Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6));
 
-    // Find if there is an existing record for this date and site
-    const index = records.findIndex((r: any) => r.date === date && r.site === site);
+    // Find if there is an existing record for this date and site (case-insensitive & trimmed matching)
+    const index = records.findIndex((r: any) => 
+      r.date === date && 
+      (r.site || "").toUpperCase().trim() === (site || "").toUpperCase().trim()
+    );
+
+    // Reuse existing ID if it matches by date and site, preventing duplication in Firestore
+    const finalId = id || (index !== -1 ? records[index].id : null) || (Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6));
 
     const newRecord = {
       id: finalId,

@@ -456,7 +456,7 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
 export default function App() {
   // Navigation & authentication state
   const [currentView, setCurrentView] = useState<"form" | "admin" | "pullout">("form");
-  const [adminTab, setAdminTab] = useState<"ledger" | "monitoring" | "labor_codes" | "security">("ledger");
+  const [adminTab, setAdminTab] = useState<"ledger" | "monitoring" | "pullout_reports" | "labor_codes" | "security">("ledger");
   const [passcode, setPasscode] = useState<string>("");
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string>("");
@@ -865,6 +865,16 @@ export default function App() {
     setSelectedReportDates([]);
   }, [reportSelectedSite, activeReportSubTab, reportSelectedMonth, selectedPullOutDate]);
 
+  // Auto-sync Pull-Out Portal active destination to the selected Site Location in Pull-Out Details
+  useEffect(() => {
+    if (currentView === "pullout" && formData.isPullOut && formData.pullOutSite) {
+      if (formData.date) {
+        setSelectedPullOutDate(formData.date);
+      }
+      setSelectedPullOutSite(formData.pullOutSite);
+    }
+  }, [currentView, formData.isPullOut, formData.pullOutSite, formData.date]);
+
   // Sync pull-out worker inputs when selection changes or records update
   useEffect(() => {
     if (!selectedPullOutDate || !selectedPullOutSite) return;
@@ -885,25 +895,28 @@ export default function App() {
     );
     
     assignedWorkers.forEach(w => {
-      const key = `${w.laborCode}-${w.laborsName}`;
+      const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+      const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+      const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+      const key = `${resolvedCode}-${w.laborsName}`;
       
       // Look for this worker in the saved monitoring record
       const savedWorker = existing?.workers?.find((sw: any) => 
-        (sw.laborCode && sw.laborCode !== "N/A" && sw.laborCode === w.laborCode) || 
+        (sw.laborCode && sw.laborCode !== "N/A" && sw.laborCode === resolvedCode) || 
         sw.laborsName === w.laborsName
       );
       
       if (savedWorker) {
         initialStatus[key] = {
           status: savedWorker.status || "Present",
-          timeIn: savedWorker.timeIn || "08:00",
-          timeOut: savedWorker.timeOut || "17:00"
+          timeIn: formatTimeTo12Hour(savedWorker.timeIn || w.pullOutTime || "08:00 AM"),
+          timeOut: formatTimeTo12Hour(savedWorker.timeOut || "05:00 PM")
         };
       } else {
         initialStatus[key] = {
           status: "Present",
-          timeIn: "08:00",
-          timeOut: "17:00"
+          timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"),
+          timeOut: formatTimeTo12Hour("05:00 PM")
         };
       }
     });
@@ -1390,16 +1403,16 @@ export default function App() {
         const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
         const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
 
-        const statusData = pullOutWorkerStatus[`${w.laborCode}-${w.laborsName}`] || 
-                           pullOutWorkerStatus[`${resolvedCode}-${w.laborsName}`] || 
-                           { status: "Present", timeIn: "08:00", timeOut: "17:00" };
+        const statusData = pullOutWorkerStatus[`${resolvedCode}-${w.laborsName}`] || 
+                           pullOutWorkerStatus[`${w.laborCode}-${w.laborsName}`] || 
+                           { status: "Present", timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"), timeOut: "05:00 PM" };
 
         return {
           laborsName: w.laborsName,
           laborCode: resolvedCode,
           status: statusData.status,
-          timeIn: statusData.status === "Present" ? statusData.timeIn : "",
-          timeOut: statusData.status === "Present" ? statusData.timeOut : "",
+          timeIn: statusData.status === "Present" ? formatTimeTo12Hour(statusData.timeIn) : "",
+          timeOut: statusData.status === "Present" ? formatTimeTo12Hour(statusData.timeOut) : "",
           pullOutReason: w.pullOutReason || "NOT SPECIFIED"
         };
       });
@@ -1868,21 +1881,63 @@ export default function App() {
   };
 
   const getProjectAndSiteForVerification = (siteName: string) => {
-    if (!siteName) return "";
-    const assigned = submissions.filter(s => 
-      s.date === selectedPullOutDate && 
-      s.isPullOut && 
-      s.pullOutSite && 
-      s.pullOutSite.toUpperCase().trim() === siteName.toUpperCase().trim()
-    );
-    const projects = Array.from(new Set(assigned.map(w => w.project?.toUpperCase().trim()).filter(Boolean)));
-    
-    // Check if siteName already starts with or contains any of the project codes to avoid duplicate code prefixes
-    const hasProjectCode = projects.some(p => siteName.toUpperCase().includes((p as string)));
-    if (projects.length > 0 && !hasProjectCode) {
-      return `${projects.join(", ")} + ${siteName}`;
+    return siteName || "";
+  };
+
+  const formatTimeTo12Hour = (timeStr: string): string => {
+    if (!timeStr) return "";
+    const trimmed = timeStr.trim().toUpperCase();
+    if (trimmed.includes("AM") || trimmed.includes("PM")) {
+      const match = trimmed.match(/(\d+):(\d+)\s*(AM|PM)/);
+      if (match) {
+        const hr = parseInt(match[1], 10);
+        const min = match[2];
+        const ampm = match[3];
+        const hrStr = hr < 10 ? `0${hr}` : `${hr}`;
+        return `${hrStr}:${min} ${ampm}`;
+      }
+      return trimmed;
     }
-    return siteName;
+    const parts = trimmed.split(":");
+    if (parts.length >= 2) {
+      let hr = parseInt(parts[0], 10);
+      const min = parts[1];
+      if (isNaN(hr)) return timeStr;
+      const ampm = hr >= 12 ? "PM" : "AM";
+      hr = hr % 12;
+      if (hr === 0) hr = 12;
+      const hrStr = hr < 10 ? `0${hr}` : `${hr}`;
+      const minStr = min.substring(0, 2);
+      return `${hrStr}:${minStr} ${ampm}`;
+    }
+    return timeStr;
+  };
+
+  const formatTimeTo24Hour = (timeStr: string): string => {
+    if (!timeStr) return "";
+    const trimmed = timeStr.trim().toUpperCase();
+    if (trimmed.includes("AM") || trimmed.includes("PM")) {
+      const match = trimmed.match(/(\d+):(\d+)\s*(AM|PM)/);
+      if (match) {
+        let hr = parseInt(match[1], 10);
+        const min = match[2].substring(0, 2);
+        const ampm = match[3];
+        if (ampm === "PM" && hr < 12) hr += 12;
+        if (ampm === "AM" && hr === 12) hr = 0;
+        const hrStr = hr < 10 ? `0${hr}` : `${hr}`;
+        return `${hrStr}:${min}`;
+      }
+    }
+    const parts = trimmed.split(":");
+    if (parts.length >= 2) {
+      const hr = parseInt(parts[0], 10);
+      const min = parts[1].substring(0, 2);
+      if (!isNaN(hr)) {
+        const hrStr = hr < 10 ? `0${hr}` : `${hr}`;
+        return `${hrStr}:${min}`;
+      }
+    }
+    return timeStr;
   };
 
   const fetchLedgerFiles = async () => {
@@ -3027,14 +3082,14 @@ export default function App() {
       const autoTableFn = autoTableModule.default;
 
       const doc = new jsPDF({
-        orientation: "portrait",
+        orientation: "landscape",
         unit: "mm",
         format: "a4"
       });
 
       // Header Brand bar styling
       doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
-      doc.rect(0, 0, 210, 35, "F");
+      doc.rect(0, 0, 297, 35, "F");
 
       // Corporate Header Texts
       doc.setTextColor(255, 255, 255);
@@ -3053,24 +3108,23 @@ export default function App() {
       doc.setTextColor(148, 163, 184); // slate-400
       doc.text(`Generated on: ${new Date().toLocaleString()}`, 15, 29);
 
-      // Section metadata box below header
+      // Section metadata box below header (No Database Class section)
       doc.setFillColor(248, 250, 252); // slate-50
       doc.setDrawColor(226, 232, 240); // slate-200
-      doc.rect(10, 38, 190, 20);
+      doc.rect(10, 38, 277, 20);
 
       doc.setFont("Helvetica", "bold");
       doc.setFontSize(8);
       doc.setTextColor(100, 116, 139); // slate-500
       doc.text("PROJECT SITE:", 14, 44);
-      doc.text("REPORT INTERVAL:", 14, 52);
-      doc.text("GENERATED FOR:", 110, 44);
-      doc.text("DATABASE CLASS:", 110, 52);
+      doc.text("REPORT INTERVAL:", 110, 44);
+      doc.text("GENERATED FOR:", 200, 44);
 
       doc.setTextColor(15, 23, 42); // slate-900
-      doc.text(siteName.toUpperCase(), 38, 44);
-      doc.text(type.toUpperCase() === "DAILY" ? "DAILY REPORT" : "MONTHLY REPORT", 48, 52);
-      doc.text(dateOrMonth, 140, 44);
-      doc.text("SECURE LOCAL SQL DATABASE", 140, 52);
+      doc.setFontSize(9);
+      doc.text(siteName.toUpperCase(), 14, 51);
+      doc.text(type.toUpperCase() === "DAILY" ? "DAILY REPORT" : "MONTHLY REPORT", 110, 51);
+      doc.text(dateOrMonth, 200, 51);
 
       if (type === "daily") {
         const monitoringRecord = pullOutMonitoringRecords.find(r => 
@@ -3107,15 +3161,15 @@ export default function App() {
 
         // Draw metrics boxes
         doc.setFillColor(241, 245, 249); // slate-100
-        doc.rect(10, 62, 190, 14, "F");
+        doc.rect(10, 62, 277, 14, "F");
 
         doc.setFontSize(8);
         doc.setFont("Helvetica", "bold");
         doc.setTextColor(51, 65, 85);
         doc.text(`TOTAL ASSIGNED: ${totalAssigned}`, 15, 71);
-        doc.text(`VERIFIED PRESENT: ${presentCount}`, 65, 71);
-        doc.text(`NO-SHOWS: ${absentCount}`, 120, 71);
-        doc.text(`PRESENCE SCORE: ${presentRate}%`, 165, 71);
+        doc.text(`VERIFIED PRESENT: ${presentCount}`, 85, 71);
+        doc.text(`NO-SHOWS: ${absentCount}`, 155, 71);
+        doc.text(`PRESENCE SCORE: ${presentRate}%`, 225, 71);
 
         const tableColumns = [
           "S.NO",
@@ -3137,8 +3191,8 @@ export default function App() {
                 laborCode: resolvedCode,
                 laborsName: w.laborsName,
                 status: "Present",
-                timeIn: "08:00",
-                timeOut: "17:00",
+                timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"),
+                timeOut: "05:00 PM",
                 pullOutReason: w.pullOutReason || "NOT SPECIFIED"
               };
             });
@@ -3146,8 +3200,8 @@ export default function App() {
         const tableRows = listToRender.map((w: any, index: number) => {
           const status = w.status || "Present";
           const isPresent = status === "Present";
-          const timeIn = isPresent ? (w.timeIn || "08:00") : "N/A";
-          const timeOut = isPresent ? (w.timeOut || "17:00") : "N/A";
+          const timeIn = isPresent ? formatTimeTo12Hour(w.timeIn || "08:00 AM") : "N/A";
+          const timeOut = isPresent ? formatTimeTo12Hour(w.timeOut || "05:00 PM") : "N/A";
           
           const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
           const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
@@ -3180,13 +3234,13 @@ export default function App() {
             textColor: [51, 65, 85] as [number, number, number]
           },
           columnStyles: {
-            0: { cellWidth: 12, halign: "center" as const },
-            1: { cellWidth: 24, halign: "center" as const },
-            2: { cellWidth: 45 },
-            3: { cellWidth: 24, halign: "center" as const },
-            4: { cellWidth: 18, halign: "center" as const },
-            5: { cellWidth: 18, halign: "center" as const },
-            6: { cellWidth: 49 }
+            0: { cellWidth: 15, halign: "center" as const },
+            1: { cellWidth: 35, halign: "center" as const },
+            2: { cellWidth: 70 },
+            3: { cellWidth: 35, halign: "center" as const },
+            4: { cellWidth: 25, halign: "center" as const },
+            5: { cellWidth: 25, halign: "center" as const },
+            6: { cellWidth: 72 }
           },
           styles: {
             cellPadding: 2,
@@ -3238,15 +3292,15 @@ export default function App() {
 
         // Draw metrics boxes
         doc.setFillColor(241, 245, 249); // slate-100
-        doc.rect(10, 62, 190, 14, "F");
+        doc.rect(10, 62, 277, 14, "F");
 
         doc.setFontSize(8);
         doc.setFont("Helvetica", "bold");
         doc.setTextColor(51, 65, 85);
         doc.text(`AUDITED DAYS: ${totalDaysWithPullOuts}`, 15, 71);
-        doc.text(`ASSIGNED MAN-DAYS: ${totalRelocationsCount}`, 65, 71);
-        doc.text(`PRESENT MAN-DAYS: ${totalPresentManDays}`, 120, 71);
-        doc.text(`AVG PRESENCE RATE: ${averagePresenceRate}%`, 165, 71);
+        doc.text(`ASSIGNED MAN-DAYS: ${totalRelocationsCount}`, 85, 71);
+        doc.text(`PRESENT MAN-DAYS: ${totalPresentManDays}`, 155, 71);
+        doc.text(`AVG PRESENCE RATE: ${averagePresenceRate}%`, 225, 71);
 
         const tableColumns = [
           "S.NO",
@@ -3274,7 +3328,7 @@ export default function App() {
             const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
             const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
             const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
-            return `${resolvedCode}(${w.status === "Present" ? w.timeIn : "A"})`;
+            return `${resolvedCode}(${w.status === "Present" ? formatTimeTo12Hour(w.timeIn) : "A"})`;
           }).join(", ") || "-";
 
           return [
@@ -3305,13 +3359,13 @@ export default function App() {
             textColor: [51, 65, 85] as [number, number, number]
           },
           columnStyles: {
-            0: { cellWidth: 12, halign: "center" as const },
-            1: { cellWidth: 24, halign: "center" as const },
-            2: { cellWidth: 22, halign: "center" as const },
-            3: { cellWidth: 22, halign: "center" as const },
-            4: { cellWidth: 22, halign: "center" as const },
-            5: { cellWidth: 24, halign: "center" as const },
-            6: { cellWidth: 64 }
+            0: { cellWidth: 15, halign: "center" as const },
+            1: { cellWidth: 35, halign: "center" as const },
+            2: { cellWidth: 30, halign: "center" as const },
+            3: { cellWidth: 30, halign: "center" as const },
+            4: { cellWidth: 30, halign: "center" as const },
+            5: { cellWidth: 35, halign: "center" as const },
+            6: { cellWidth: 102 }
           },
           styles: {
             cellPadding: 2,
@@ -3889,7 +3943,7 @@ export default function App() {
                                   icon={<MapPin className="h-3.5 w-3.5 text-slate-400" />}
                                   placeholder="Select or search destination site..."
                                   options={(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).map(pc => ({
-                                    value: pc.location ? `${pc.code} + ${pc.location}` : pc.code,
+                                    value: pc.location || pc.code,
                                     label: pc.name,
                                     sublabel: pc.location
                                   }))}
@@ -3911,8 +3965,8 @@ export default function App() {
                                   id="input-pull-out-time"
                                   type="time"
                                   required
-                                  value={formData.pullOutTime}
-                                  onChange={(e) => setFormData(prev => ({ ...prev, pullOutTime: e.target.value }))}
+                                  value={formatTimeTo24Hour(formData.pullOutTime)}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, pullOutTime: formatTimeTo12Hour(e.target.value) }))}
                                   className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all"
                                 />
                               </div>
@@ -3991,8 +4045,8 @@ export default function App() {
                                   id="input-undertime-time"
                                   type="time"
                                   required
-                                  value={formData.underTimeTime}
-                                  onChange={(e) => setFormData(prev => ({ ...prev, underTimeTime: e.target.value }))}
+                                  value={formatTimeTo24Hour(formData.underTimeTime)}
+                                  onChange={(e) => setFormData(prev => ({ ...prev, underTimeTime: formatTimeTo12Hour(e.target.value) }))}
                                   className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-amber-500 text-xs font-semibold text-slate-800 transition-all"
                               />
                             </div>
@@ -4291,43 +4345,8 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Pull-Out Management Hub</h3>
-                  <p className="text-[10px] text-slate-400 font-mono">Verify relocation status and compile monitoring reports</p>
+                  <p className="text-[10px] text-slate-400 font-mono">Verify relocation status of workers in the Verification Portal</p>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200/50">
-                <button
-                  type="button"
-                  onClick={() => setActivePullOutSection("verification")}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    activePullOutSection === "verification"
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-600 hover:text-indigo-600 hover:bg-slate-200/30"
-                  }`}
-                >
-                  Verification Portal
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActivePullOutSection("reports");
-                    // Automatically pre-populate default report site if not set
-                    const allSites = Array.from(new Set([
-                      ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
-                      ...pullOutMonitoringRecords.map(r => r.site)
-                    ].map(s => s.toUpperCase().trim()))).filter(Boolean);
-                    if (allSites.length > 0 && !reportSelectedSite) {
-                      setReportSelectedSite(allSites[0]);
-                    }
-                  }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    activePullOutSection === "reports"
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : "text-slate-600 hover:text-indigo-600 hover:bg-slate-200/30"
-                  }`}
-                >
-                  Monitoring Reports
-                </button>
               </div>
             </div>
 
@@ -4364,6 +4383,7 @@ export default function App() {
                       <span>Active Destination Sites</span>
                       <span className="font-mono bg-indigo-50 text-indigo-600 text-[9px] px-2 py-0.5 rounded-full border border-indigo-100">
                         {(() => {
+                          if (formData.isPullOut && formData.pullOutSite) return 1;
                           const sFiltered = submissions.filter(s => s.date === selectedPullOutDate && s.isPullOut && s.pullOutSite);
                           return Array.from(new Set(sFiltered.map(s => s.pullOutSite?.toUpperCase().trim()).filter(Boolean))).length;
                         })()} Active
@@ -4372,7 +4392,10 @@ export default function App() {
 
                     {(() => {
                       const sFiltered = submissions.filter(s => s.date === selectedPullOutDate && s.isPullOut && s.pullOutSite);
-                      const uniqueSites = Array.from(new Set(sFiltered.map(s => s.pullOutSite?.toUpperCase().trim()).filter(Boolean)));
+                      let uniqueSites = Array.from(new Set(sFiltered.map(s => s.pullOutSite?.toUpperCase().trim()).filter(Boolean)));
+                      if (formData.isPullOut && formData.pullOutSite) {
+                        uniqueSites = [formData.pullOutSite.toUpperCase().trim()];
+                      }
                       
                       if (uniqueSites.length === 0) {
                         return (
@@ -4487,8 +4510,11 @@ export default function App() {
                             );
 
                             return assignedWorkers.map((w, index) => {
-                              const key = `${w.laborCode}-${w.laborsName}`;
-                              const statusData = pullOutWorkerStatus[key] || { status: "Present", timeIn: "08:00", timeOut: "17:00" };
+                              const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                              const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+                              const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+                              const key = `${resolvedCode}-${w.laborsName}`;
+                              const statusData = pullOutWorkerStatus[key] || { status: "Present", timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"), timeOut: "05:00 PM" };
                               const isPresent = statusData.status === "Present";
 
                               return (
@@ -4520,7 +4546,7 @@ export default function App() {
                                       </span>
                                     </div>
                                     <span className="text-[9px] font-mono text-slate-400 mt-1 block uppercase truncate">
-                                      Relocated at {w.pullOutTime || "08:00"} • Reason: {w.pullOutReason || "NOT SPECIFIED"}
+                                      Relocated at {formatTimeTo12Hour(w.pullOutTime || "08:00 AM")} • Reason: {w.pullOutReason || "NOT SPECIFIED"}
                                     </span>
                                   </div>
 
@@ -4566,10 +4592,10 @@ export default function App() {
                                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 text-center">In</span>
                                           <input
                                             type="time"
-                                            value={statusData.timeIn}
+                                            value={formatTimeTo24Hour(statusData.timeIn)}
                                             onChange={(e) => setPullOutWorkerStatus(prev => ({
                                               ...prev,
-                                              [key]: { ...statusData, timeIn: e.target.value }
+                                              [key]: { ...statusData, timeIn: formatTimeTo12Hour(e.target.value) }
                                             }))}
                                             className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-1.5 focus:outline-none focus:border-indigo-500 text-[11px] font-bold font-mono text-center text-slate-800 transition-all"
                                           />
@@ -4579,10 +4605,10 @@ export default function App() {
                                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 text-center">Out</span>
                                           <input
                                             type="time"
-                                            value={statusData.timeOut}
+                                            value={formatTimeTo24Hour(statusData.timeOut)}
                                             onChange={(e) => setPullOutWorkerStatus(prev => ({
                                               ...prev,
-                                              [key]: { ...statusData, timeOut: e.target.value }
+                                              [key]: { ...statusData, timeOut: formatTimeTo12Hour(e.target.value) }
                                             }))}
                                             className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-1.5 focus:outline-none focus:border-indigo-500 text-[11px] font-bold font-mono text-center text-slate-800 transition-all"
                                           />
@@ -4651,10 +4677,12 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        )}
 
-            {/* MONITORING REPORTS DASHBOARD SECTION */}
-            {activePullOutSection === "reports" && (
-              <div className="bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm space-y-6">
+        {/* MONITORING REPORTS DASHBOARD SECTION (MOVED TO DATABASE ADMIN TAB) */}
+        {currentView === "admin" && adminTab === "pullout_reports" && isAuthenticated && (
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm space-y-6">
                 
                 {/* Reports Setup Bar */}
                 <div className="bg-slate-50 border border-slate-200/60 rounded-2.5xl p-5 flex flex-col xl:flex-row items-center justify-between gap-5">
@@ -5254,8 +5282,8 @@ export default function App() {
                                     laborCode: resolvedCode,
                                     laborsName: w.laborsName,
                                     status: "Present",
-                                    timeIn: "08:00",
-                                    timeOut: "17:00",
+                                    timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"),
+                                    timeOut: "05:00 PM",
                                     pullOutReason: w.pullOutReason || "NOT SPECIFIED"
                                   };
                                 });
@@ -5312,8 +5340,8 @@ export default function App() {
                                       {listToRender.map((w: any, index: number) => {
                                         const status = w.status || "Present";
                                         const isPresent = status === "Present";
-                                        const timeIn = isPresent ? (w.timeIn || "08:00") : "N/A";
-                                        const timeOut = isPresent ? (w.timeOut || "17:00") : "N/A";
+                                        const timeIn = isPresent ? formatTimeTo12Hour(w.timeIn || "08:00 AM") : "N/A";
+                                        const timeOut = isPresent ? formatTimeTo12Hour(w.timeOut || "05:00 PM") : "N/A";
                                         
                                         const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
                                         const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
@@ -5444,81 +5472,142 @@ export default function App() {
                           </div>
 
                           {/* Table calendar summary */}
-                          <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-3xs">
-                            <table className="w-full text-left border-collapse text-xs">
-                              <thead>
-                                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                                  <th className="py-3 px-4 text-center w-12">S.No</th>
-                                  <th className="py-3 px-4 w-32">Date</th>
-                                  <th className="py-3 px-4 text-center w-28">Assigned</th>
-                                  <th className="py-3 px-4 text-center w-28">Present</th>
-                                  <th className="py-3 px-4 text-center w-28">No-Show</th>
-                                  <th className="py-3 px-4 text-center w-28">Presence %</th>
-                                  <th className="py-3 px-4">Relocated Workers Roster &amp; Hours</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {monthRecords.map((record, index) => {
-                                  const dayTotal = record.workers?.length || 0;
-                                  let dayPresent = 0;
-                                  let dayAbsent = 0;
+                          <div className="space-y-3.5">
+                            {selectedReportDates.length > 0 && (
+                              <div className="flex items-center justify-between p-3.5 bg-rose-50 border border-rose-150 rounded-2xl text-xs font-semibold text-rose-700 animate-in fade-in slide-in-from-top-4 duration-200">
+                                <div className="flex items-center gap-2">
+                                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white font-mono animate-pulse">
+                                    {selectedReportDates.length}
+                                  </span>
+                                  <span>Relocation day record(s) selected for deletion.</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMonthlyDays(selectedReportDates)}
+                                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all shadow-md shadow-rose-100 cursor-pointer font-sans"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" /> Delete Selected ({selectedReportDates.length})
+                                </button>
+                              </div>
+                            )}
 
-                                  record.workers?.forEach((w: any) => {
-                                    if (w.status === "Present") dayPresent++;
-                                    else dayAbsent++;
-                                  });
+                            <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-3xs bg-white">
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                    <th className="py-3 px-4 text-center w-12">
+                                      <input
+                                        type="checkbox"
+                                        checked={monthRecords.length > 0 && selectedReportDates.length === monthRecords.length}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setSelectedReportDates(monthRecords.map(r => r.date));
+                                          } else {
+                                            setSelectedReportDates([]);
+                                          }
+                                        }}
+                                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-3.5 w-3.5"
+                                      />
+                                    </th>
+                                    <th className="py-3 px-4 text-center w-12">S.No</th>
+                                    <th className="py-3 px-4 w-32">Date</th>
+                                    <th className="py-3 px-4 text-center w-28">Assigned</th>
+                                    <th className="py-3 px-4 text-center w-28">Present</th>
+                                    <th className="py-3 px-4 text-center w-28">No-Show</th>
+                                    <th className="py-3 px-4 text-center w-28">Presence %</th>
+                                    <th className="py-3 px-4">Relocated Workers Roster &amp; Hours</th>
+                                    <th className="py-3 px-4 text-center w-16">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {monthRecords.map((record, index) => {
+                                    const dayTotal = record.workers?.length || 0;
+                                    let dayPresent = 0;
+                                    let dayAbsent = 0;
 
-                                  const dayRate = dayTotal > 0 ? Math.round((dayPresent / dayTotal) * 100) : 0;
+                                    record.workers?.forEach((w: any) => {
+                                      if (w.status === "Present") dayPresent++;
+                                      else dayAbsent++;
+                                    });
 
-                                  const formattedDate = (() => {
-                                    try {
-                                      const d = new Date(record.date);
-                                      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-                                    } catch {
-                                      return record.date;
-                                    }
-                                  })();
+                                    const dayRate = dayTotal > 0 ? Math.round((dayPresent / dayTotal) * 100) : 0;
 
-                                  return (
-                                    <tr key={record.id} className="hover:bg-slate-50/50 transition-colors">
-                                      <td className="py-3 px-4 text-center font-mono text-slate-400 font-bold">{index + 1}</td>
-                                      <td className="py-3 px-4 font-mono font-bold text-slate-800 uppercase">{formattedDate}</td>
-                                      <td className="py-3 px-4 text-center font-mono font-semibold text-slate-700">{dayTotal}</td>
-                                      <td className="py-3 px-4 text-center font-mono font-semibold text-emerald-600">{dayPresent}</td>
-                                      <td className="py-3 px-4 text-center font-mono font-semibold text-rose-500">{dayAbsent}</td>
-                                      <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">{dayRate}%</td>
-                                      <td className="py-3 px-4">
-                                        <div className="flex flex-wrap gap-1.5 max-w-lg">
-                                          {record.workers?.map((w: any) => {
-                                            const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
-                                            const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
-                                            const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
-                                            return (
-                                              <span
-                                                key={resolvedCode + "-" + w.laborsName}
-                                                className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase font-mono px-2 py-0.5 rounded-full border ${
-                                                  w.status === "Present"
-                                                    ? "bg-emerald-50 text-emerald-600 border-emerald-100"
-                                                    : "bg-rose-50 text-rose-500 border-rose-100"
-                                                }`}
-                                                title={`${w.laborsName} ${w.status === "Present" ? `(${w.timeIn} - ${w.timeOut})` : '(No-Show)'}`}
-                                              >
-                                                {resolvedCode}
-                                                {w.status === "Present" && (
-                                                  <span className="text-[8px] font-normal text-slate-400">
-                                                    ({w.timeIn})
-                                                  </span>
-                                                )}
-                                              </span>
-                                            );
-                                          })}
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                                    const formattedDate = (() => {
+                                      try {
+                                        const d = new Date(record.date);
+                                        return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                                      } catch {
+                                        return record.date;
+                                      }
+                                    })();
+
+                                    const isChecked = selectedReportDates.includes(record.date);
+
+                                    return (
+                                      <tr key={record.id} className={`hover:bg-slate-50/50 transition-colors ${isChecked ? "bg-rose-50/20" : ""}`}>
+                                        <td className="py-3 px-4 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={(e) => {
+                                              if (e.target.checked) {
+                                                setSelectedReportDates(prev => [...prev, record.date]);
+                                              } else {
+                                                setSelectedReportDates(prev => prev.filter(d => d !== record.date));
+                                              }
+                                            }}
+                                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-3.5 w-3.5"
+                                          />
+                                        </td>
+                                        <td className="py-3 px-4 text-center font-mono text-slate-400 font-bold">{index + 1}</td>
+                                        <td className="py-3 px-4 font-mono font-bold text-slate-800 uppercase">{formattedDate}</td>
+                                        <td className="py-3 px-4 text-center font-mono font-semibold text-slate-700">{dayTotal}</td>
+                                        <td className="py-3 px-4 text-center font-mono font-semibold text-emerald-600">{dayPresent}</td>
+                                        <td className="py-3 px-4 text-center font-mono font-semibold text-rose-500">{dayAbsent}</td>
+                                        <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">{dayRate}%</td>
+                                        <td className="py-3 px-4">
+                                          <div className="flex flex-wrap gap-1.5 max-w-lg">
+                                            {record.workers?.map((w: any) => {
+                                              const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                                              const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
+                                              const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
+                                              return (
+                                                <span
+                                                  key={resolvedCode + "-" + w.laborsName}
+                                                  className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase font-mono px-2 py-0.5 rounded-full border ${
+                                                    w.status === "Present"
+                                                      ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                                                      : "bg-rose-50 text-rose-500 border-rose-100"
+                                                  }`}
+                                                  title={`${w.laborsName} ${w.status === "Present" ? `(${formatTimeTo12Hour(w.timeIn)} - ${formatTimeTo12Hour(w.timeOut)})` : '(No-Show)'}`}
+                                                >
+                                                  {resolvedCode}
+                                                  {w.status === "Present" && (
+                                                    <span className="text-[8px] font-normal text-slate-400">
+                                                      ({formatTimeTo12Hour(w.timeIn)})
+                                                    </span>
+                                                  )}
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-center">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteMonthlyDays([record.date])}
+                                            title="Delete all records for this day"
+                                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer inline-flex items-center justify-center"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
                           </div>
                         </div>
                       );
@@ -5539,8 +5628,6 @@ export default function App() {
                 )}
               </div>
             )}
-          </div>
-        )}
 
         {/* ADMIN DATABASE VIEW */}
         {currentView === "admin" && (
@@ -5717,6 +5804,27 @@ export default function App() {
                       }`}
                     >
                       <ClipboardCheck className="h-4 w-4" /> Activity Progress Monitoring
+                    </button>
+                    <button
+                      id="tab-pullout-reports"
+                      onClick={() => {
+                        setAdminTab("pullout_reports");
+                        // Automatically pre-populate default report site if not set
+                        const allSites = Array.from(new Set([
+                          ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
+                          ...pullOutMonitoringRecords.map(r => r.site)
+                        ].map(s => s.toUpperCase().trim()))).filter(Boolean);
+                        if (allSites.length > 0 && !reportSelectedSite) {
+                          setReportSelectedSite(allSites[0]);
+                        }
+                      }}
+                      className={`pb-2 pt-2 px-6 text-xs font-bold tracking-wider uppercase transition-all duration-200 cursor-pointer rounded-lg flex items-center gap-2 ${
+                        adminTab === "pullout_reports"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                      }`}
+                    >
+                      <LogOut className="h-4 w-4 rotate-180" /> Relocation Monitoring Reports
                     </button>
                     <button
                       id="tab-labor-codes"
