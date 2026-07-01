@@ -902,8 +902,8 @@ export default function App() {
       
       // Look for this worker in the saved monitoring record
       const savedWorker = existing?.workers?.find((sw: any) => 
-        (sw.laborCode && sw.laborCode !== "N/A" && sw.laborCode === resolvedCode) || 
-        sw.laborsName === w.laborsName
+        (sw.laborCode && sw.laborCode !== "N/A" && sw.laborCode.toUpperCase().trim() === resolvedCode.toUpperCase().trim()) || 
+        (sw.laborsName || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim()
       );
       
       if (savedWorker) {
@@ -1403,8 +1403,7 @@ export default function App() {
         const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
         const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
 
-        const statusData = pullOutWorkerStatus[`${resolvedCode}-${w.laborsName}`] || 
-                           pullOutWorkerStatus[`${w.laborCode}-${w.laborsName}`] || 
+        const statusData = getPullOutStatusData(resolvedCode, w.laborCode || "N/A", w.laborsName) || 
                            { status: "Present", timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"), timeOut: "05:00 PM" };
 
         return {
@@ -1938,6 +1937,16 @@ export default function App() {
       }
     }
     return timeStr;
+  };
+
+  const getPullOutStatusData = (resolvedCode: string, laborCode: string, laborsName: string, statusMap: any = pullOutWorkerStatus) => {
+    const key1 = `${resolvedCode}-${laborsName}`.toUpperCase().trim();
+    const key2 = `${laborCode}-${laborsName}`.toUpperCase().trim();
+    const matchedKey = Object.keys(statusMap || {}).find(k => {
+      const upperK = k.toUpperCase().trim();
+      return upperK === key1 || upperK === key2;
+    });
+    return matchedKey ? statusMap[matchedKey] : null;
   };
 
   const fetchLedgerFiles = async () => {
@@ -3328,7 +3337,7 @@ export default function App() {
             const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
             const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
             const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
-            return `${resolvedCode}(${w.status === "Present" ? formatTimeTo12Hour(w.timeIn) : "A"})`;
+            return `${resolvedCode}(${w.status === "Present" ? `${formatTimeTo12Hour(w.timeIn)} - ${formatTimeTo12Hour(w.timeOut || "05:00 PM")}` : "A"})`;
           }).join(", ") || "-";
 
           return [
@@ -4514,7 +4523,8 @@ export default function App() {
                               const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
                               const resolvedCode = matched ? matched.code : (w.laborCode || "N/A");
                               const key = `${resolvedCode}-${w.laborsName}`;
-                              const statusData = pullOutWorkerStatus[key] || { status: "Present", timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"), timeOut: "05:00 PM" };
+                              const statusData = getPullOutStatusData(resolvedCode, w.laborCode || "N/A", w.laborsName) || 
+                                                 { status: "Present", timeIn: formatTimeTo12Hour(w.pullOutTime || "08:00 AM"), timeOut: "05:00 PM" };
                               const isPresent = statusData.status === "Present";
 
                               return (
@@ -5584,7 +5594,7 @@ export default function App() {
                                                   {resolvedCode}
                                                   {w.status === "Present" && (
                                                     <span className="text-[8px] font-normal text-slate-400">
-                                                      ({formatTimeTo12Hour(w.timeIn)})
+                                                      ({formatTimeTo12Hour(w.timeIn)} - {formatTimeTo12Hour(w.timeOut || "05:00 PM")})
                                                     </span>
                                                   )}
                                                 </span>
