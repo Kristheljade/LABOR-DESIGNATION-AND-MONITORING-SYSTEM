@@ -202,6 +202,30 @@
         "workers",
         "createdAt"
       ]
+    },
+    "custom_task": {
+      "title": "CustomTask",
+      "description": "A custom user task created on the fly.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The uppercase task name."
+        },
+        "name": {
+          "type": "string",
+          "description": "The custom task name."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "The timestamp when this custom task was created."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -224,6 +248,10 @@
     "/pull_out_monitoring/{id}": {
       "schema": "pull_out_monitoring_record",
       "description": "Verified relocation attendance and timing records for specific sites and dates."
+    },
+    "/custom_tasks/{id}": {
+      "schema": "custom_task",
+      "description": "Saved custom tasks for search and select autocomplete."
     }
   }
 }

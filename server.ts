@@ -584,6 +584,104 @@ app.post("/api/setup-passcode", async (req, res) => {
   });
 });
 
+const CUSTOM_TASKS_FILE = path.join(process.cwd(), "custom_tasks.json");
+
+// Helper to read custom tasks
+async function getCustomTasks(): Promise<string[]> {
+  try {
+    const firestoreDb = await getDb();
+    if (firestoreDb) {
+      const colRef = collection(firestoreDb, "custom_tasks");
+      const querySnapshot = await getDocs(colRef);
+      const list: string[] = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data && data.name) {
+          list.push(data.name.toUpperCase().trim());
+        }
+      });
+
+      if (list.length > 0) {
+        // Cache locally
+        await fs.writeFile(CUSTOM_TASKS_FILE, JSON.stringify(list, null, 2), "utf-8");
+        return list;
+      }
+    }
+  } catch (error) {
+    handleFirebaseError("getCustomTasks", error);
+  }
+
+  try {
+    if (!existsSync(CUSTOM_TASKS_FILE)) {
+      return [];
+    }
+    const data = await fs.readFile(CUSTOM_TASKS_FILE, "utf-8");
+    return JSON.parse(data || "[]");
+  } catch (error) {
+    console.error("Error reading custom tasks from fallback:", error);
+    return [];
+  }
+}
+
+// Get all custom tasks
+app.get("/api/custom-tasks", async (req, res) => {
+  try {
+    const tasks = await getCustomTasks();
+    res.json(tasks);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create/Update custom task
+app.post("/api/custom-tasks", async (req, res) => {
+  try {
+    const { taskName } = req.body;
+    if (!taskName) {
+      return res.status(400).json({ error: "Task Name is required." });
+    }
+
+    const cleanTask = taskName.trim().toUpperCase();
+    const id = cleanTask; // Use uppercase task name as ID to prevent duplicates
+
+    const newTaskItem = {
+      name: cleanTask,
+      createdAt: new Date().toISOString()
+    };
+
+    let firebaseSuccess = false;
+    try {
+      const firestoreDb = await getDb();
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, "custom_tasks", id), newTaskItem);
+        firebaseSuccess = true;
+        console.log(`Stored custom task ${id} in Firestore.`);
+      }
+    } catch (error) {
+      handleFirebaseError("createCustomTask", error);
+    }
+
+    // Cache locally
+    try {
+      let tasks: string[] = [];
+      if (existsSync(CUSTOM_TASKS_FILE)) {
+        const data = await fs.readFile(CUSTOM_TASKS_FILE, "utf-8");
+        tasks = JSON.parse(data || "[]");
+      }
+      if (!tasks.includes(cleanTask)) {
+        tasks.push(cleanTask);
+      }
+      await fs.writeFile(CUSTOM_TASKS_FILE, JSON.stringify(tasks, null, 2), "utf-8");
+    } catch (err) {
+      console.error("Error caching custom task locally:", err);
+    }
+
+    res.status(201).json({ success: true, taskName: cleanTask, storedInFirebase: firebaseSuccess });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const CODES_FILE = path.join(process.cwd(), "labor_codes.json");
 
 // Helper to read labor codes

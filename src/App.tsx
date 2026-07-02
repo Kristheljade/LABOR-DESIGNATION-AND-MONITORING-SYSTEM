@@ -482,6 +482,46 @@ export default function App() {
   const [pullOutSaveSuccess, setPullOutSaveSuccess] = useState<boolean>(false);
   const [pullOutSaveError, setPullOutSaveError] = useState<string>("");
 
+  const [customTasks, setCustomTasks] = useState<string[]>([]);
+
+  const fetchCustomTasks = async () => {
+    try {
+      const res = await fetch("/api/custom-tasks");
+      if (res.ok) {
+        const data = await res.json();
+        setCustomTasks(data);
+      }
+    } catch (err) {
+      console.error("Error fetching custom tasks:", err);
+    }
+  };
+
+  const saveCustomTask = async (taskName: string) => {
+    const trimmed = taskName.trim().toUpperCase();
+    if (!trimmed) return;
+
+    // Check if it already exists in COMMON_TASKS or customTasks (case-insensitive)
+    const existsInCommon = COMMON_TASKS.some(t => t.toUpperCase() === trimmed);
+    const existsInCustom = customTasks.some(t => t.toUpperCase() === trimmed);
+    if (existsInCommon || existsInCustom) return;
+
+    // Update local state immediately so it is available in the dropdown
+    setCustomTasks(prev => {
+      if (prev.some(t => t.toUpperCase() === trimmed)) return prev;
+      return [...prev, trimmed];
+    });
+
+    try {
+      await fetch("/api/custom-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskName: trimmed })
+      });
+    } catch (err) {
+      console.error("Error saving custom task:", err);
+    }
+  };
+
   const lastLoadedPullOutKeyRef = useRef<string>("");
   const shouldForceSyncRef = useRef<boolean>(false);
   const pullOutWorkerStatusRef = useRef<any>({});
@@ -849,6 +889,7 @@ export default function App() {
     checkPasscodeStatus();
     fetchLaborCodes();
     fetchProjectCodes();
+    fetchCustomTasks();
   }, []);
 
   // Fetch logs and pull-out records with short polling
@@ -857,9 +898,11 @@ export default function App() {
     fetchLaborCodes();
     fetchProjectCodes();
     fetchPullOutMonitoring();
+    fetchCustomTasks();
 
     const interval = setInterval(() => {
       fetchSubmissions();
+      fetchCustomTasks();
       if (currentView === "pullout" || currentView === "admin") {
         fetchPullOutMonitoring();
       }
@@ -1005,12 +1048,15 @@ export default function App() {
 
   const handleTaskChange = (val: string) => {
     const upperVal = val.toUpperCase().trim();
-    if (COMMON_TASKS.includes(upperVal)) {
+    const tasksOptions = Array.from(new Set([...COMMON_TASKS, ...customTasks]));
+    
+    if (tasksOptions.some(t => t.toUpperCase() === upperVal)) {
       setFormData(prev => ({ ...prev, reassignedTask: upperVal, customReassignedTask: "" }));
     } else if (val === "") {
       setFormData(prev => ({ ...prev, reassignedTask: "", customReassignedTask: "" }));
     } else {
       setFormData(prev => ({ ...prev, reassignedTask: "OTHER", customReassignedTask: val }));
+      saveCustomTask(val);
     }
   };
 
@@ -1684,6 +1730,9 @@ export default function App() {
         setSubmitError("Please specify the Reassigned Task.");
         return;
       }
+
+      // Automatically save the custom task if it doesn't already exist
+      saveCustomTask(actualReassignedTask);
 
       if (!formData.isPullOut) {
         if (formData.attendanceStatus === "Absent") {
@@ -3867,7 +3916,7 @@ export default function App() {
                           label="Active Assigned Task"
                           icon={<ClipboardCheck className="h-3.5 w-3.5 text-slate-400" />}
                           placeholder="Search or enter custom task..."
-                          options={COMMON_TASKS.map(task => ({
+                          options={Array.from(new Set([...COMMON_TASKS, ...customTasks])).map(task => ({
                             value: task,
                             label: task
                           }))}
