@@ -38,7 +38,10 @@ import {
   Heart,
   Printer,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Settings,
+  Loader2,
+  Save
 } from "lucide-react";
 import { Submission } from "./types";
 
@@ -542,7 +545,18 @@ export default function App() {
     }
   });
   const [activeReportSubTab, setActiveReportSubTab] = useState<"daily" | "monthly">("daily");
-  const [activePullOutSection, setActivePullOutSection] = useState<"verification" | "reports">("verification");
+  const [activePullOutSection, setActivePullOutSection] = useState<"select_labors" | "verification" | "reports">("select_labors");
+  const [selectedLaborIds, setSelectedLaborIds] = useState<string[]>([]);
+  const [destinationSite, setDestinationSite] = useState<string>("");
+  const [hubPullOutReason, setHubPullOutReason] = useState<string>("");
+  const [laborSearchQuery, setLaborSearchQuery] = useState<string>("");
+  const [isSavingPullOuts, setIsSavingPullOuts] = useState<boolean>(false);
+  const [isAddingLaborInline, setIsAddingLaborInline] = useState<boolean>(false);
+  const [inlineLaborCode, setInlineLaborCode] = useState<string>("");
+  const [inlineLaborName, setInlineLaborName] = useState<string>("");
+  const [inlineLaborDesignation, setInlineLaborDesignation] = useState<string>("HELPER");
+  const [inlineLaborError, setInlineLaborError] = useState<string>("");
+  const [isSavingInlineLabor, setIsSavingInlineLabor] = useState<boolean>(false);
   const [reportSearchQuery, setReportSearchQuery] = useState<string>("");
   const [reportGroupBy, setReportGroupBy] = useState<"site" | "project">("site");
   const [selectedReportLaborNames, setSelectedReportLaborNames] = useState<string[]>([]);
@@ -1449,6 +1463,168 @@ export default function App() {
     }
   };
 
+  // Save selected labors for pull-out (relocation)
+  const handleSaveSelectedPullOuts = async () => {
+    if (!selectedPullOutDate) {
+      showNotification("Error", "Please select a relocation date.", "error");
+      return;
+    }
+    if (!destinationSite) {
+      showNotification("Error", "Please select a destination site.", "error");
+      return;
+    }
+    if (selectedLaborIds.length === 0) {
+      showNotification("Error", "Please select at least one labor to pull out.", "error");
+      return;
+    }
+
+    setIsSavingPullOuts(true);
+
+    try {
+      const masterLaborCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+      const masterProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+      const matchedProject = masterProjectCodes.find(pc => pc.code.toUpperCase() === destinationSite.toUpperCase().trim() || pc.name.toUpperCase() === destinationSite.toUpperCase().trim());
+      const siteLocation = matchedProject ? matchedProject.location || matchedProject.name : destinationSite;
+
+      const promises = selectedLaborIds.map(async (laborId) => {
+        const labor = masterLaborCodes.find(lc => lc.id === laborId || lc.code === laborId);
+        if (!labor) return;
+
+        // Check if there is an existing submission for this labor on this date
+        const existingSub = submissions.find(s => 
+          s.date === selectedPullOutDate && 
+          s.laborsName && 
+          s.laborsName.trim().toUpperCase() === labor.name.trim().toUpperCase()
+        );
+
+        const payload = {
+          date: selectedPullOutDate,
+          project: matchedProject ? matchedProject.code : "PULLOUT",
+          projectLocation: siteLocation.toUpperCase(),
+          siteEngineer: "PORTAL HUB",
+          reassignedTask: "PULL-OUT",
+          laborsName: labor.name.toUpperCase().trim(),
+          designation: (labor.designation || "HELPER").toUpperCase().trim(),
+          attendanceStatus: "Present",
+          isPullOut: true,
+          pullOutSite: destinationSite.toUpperCase().trim(),
+          pullOutTime: "08:00 AM",
+          pullOutReason: hubPullOutReason.trim() ? hubPullOutReason.trim().toUpperCase() : "RELOCATED VIA HUB"
+        };
+
+        if (existingSub) {
+          // Update existing submission via PUT
+          const res = await fetch(`/api/submissions/${existingSub.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...existingSub,
+              ...payload,
+              isPullOut: true,
+              pullOutSite: destinationSite.toUpperCase().trim(),
+              pullOutReason: hubPullOutReason.trim() ? hubPullOutReason.trim().toUpperCase() : "RELOCATED VIA HUB"
+            })
+          });
+          if (!res.ok) {
+            throw new Error(`Failed to update relocation for ${labor.name}`);
+          }
+        } else {
+          // Create new pull-out submission via POST
+          const res = await fetch("/api/submissions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.error || `Failed to save relocation for ${labor.name}`);
+          }
+        }
+      });
+
+      await Promise.all(promises);
+      showNotification("Success", "Selected labor(s) relocated and connected successfully.", "success");
+      
+      // Automatically select the destination site in the Verification portal BEFORE clearing values
+      setSelectedPullOutSite(destinationSite);
+
+      // Clear checkbox selections and reset site selection
+      setSelectedLaborIds([]);
+      setDestinationSite("");
+      setHubPullOutReason("");
+      setLaborSearchQuery("");
+
+      // Refresh submissions
+      await fetchSubmissions();
+
+      // Switch view to verification tab
+      setActivePullOutSection("verification");
+    } catch (err: any) {
+      showNotification("Error", err.message || "Failed to save relocations.", "error");
+    } finally {
+      setIsSavingPullOuts(false);
+    }
+  };
+
+  // Save new labor code inline inside the Select Labors Hub
+  const handleSaveInlineLabor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inlineLaborCode.trim() || !inlineLaborName.trim()) {
+      setInlineLaborError("Please fill in both Labor Code and Name.");
+      return;
+    }
+
+    setIsSavingInlineLabor(true);
+    setInlineLaborError("");
+
+    try {
+      const cleanCode = inlineLaborCode.trim().toUpperCase();
+      const cleanName = inlineLaborName.trim().toUpperCase();
+      const cleanDesig = inlineLaborDesignation.trim().toUpperCase();
+
+      const res = await fetch("/api/labor-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: cleanCode,
+          name: cleanName,
+          designation: cleanDesig,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        
+        // Add to state
+        setLaborCodes(prev => {
+          const filtered = prev.filter(c => c.id !== data.entry.id && c.code !== data.entry.code);
+          return [...filtered, data.entry];
+        });
+
+        // Automatically select the newly created labor!
+        setSelectedLaborIds(prev => {
+          const idToSelect = data.entry.id || data.entry.code;
+          if (prev.includes(idToSelect)) return prev;
+          return [...prev, idToSelect];
+        });
+
+        // Reset fields and toggle form
+        setInlineLaborCode("");
+        setInlineLaborName("");
+        setInlineLaborDesignation("HELPER");
+        setIsAddingLaborInline(false);
+        showNotification("Success", `Labor "${cleanName}" added and selected.`, "success");
+      } else {
+        const errorData = await res.json();
+        setInlineLaborError(errorData.error || "Failed to save labor.");
+      }
+    } catch (err) {
+      setInlineLaborError("Network error. Could not connect to server.");
+    } finally {
+      setIsSavingInlineLabor(false);
+    }
+  };
+
   // Save or update pull-out monitoring verification record
   const handleSavePullOutMonitoring = async () => {
     if (!selectedPullOutDate || !selectedPullOutSite) {
@@ -1956,7 +2132,13 @@ export default function App() {
   };
 
   const getProjectAndSiteForVerification = (siteName: string) => {
-    return siteName || "";
+    if (!siteName) return "";
+    const masterProjects = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+    const match = masterProjects.find(p => p.code.toUpperCase() === siteName.toUpperCase().trim() || p.name.toUpperCase() === siteName.toUpperCase().trim());
+    if (match) {
+      return `${match.code} - ${match.name} (${match.location || 'N/A'})`;
+    }
+    return siteName.toUpperCase();
   };
 
   const formatTimeTo12Hour = (timeStr: string): string => {
@@ -3196,20 +3378,31 @@ export default function App() {
       // Section metadata box below header (No Database Class section)
       doc.setFillColor(248, 250, 252); // slate-50
       doc.setDrawColor(226, 232, 240); // slate-200
-      doc.rect(10, 38, 277, 20);
+      doc.rect(10, 37, 277, 23);
 
       doc.setFont("Helvetica", "bold");
       doc.setFontSize(8);
       doc.setTextColor(100, 116, 139); // slate-500
-      doc.text("PROJECT SITE:", 14, 44);
-      doc.text("REPORT INTERVAL:", 110, 44);
-      doc.text("GENERATED FOR:", 200, 44);
+      doc.text("PROJECT SITE:", 14, 43);
+      doc.text("REPORT INTERVAL:", 110, 43);
+      doc.text("GENERATED FOR:", 200, 43);
 
       doc.setTextColor(15, 23, 42); // slate-900
       doc.setFontSize(9);
-      doc.text(siteName.toUpperCase(), 14, 51);
-      doc.text(type.toUpperCase() === "DAILY" ? "DAILY REPORT" : "MONTHLY REPORT", 110, 51);
-      doc.text(dateOrMonth, 200, 51);
+      const masterProjectCodes = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+      const matchedProj = masterProjectCodes.find(pc => pc.code.toUpperCase() === siteName.toUpperCase().trim() || pc.name.toUpperCase() === siteName.toUpperCase().trim());
+      const displaySiteName = matchedProj 
+        ? `${matchedProj.code} - ${matchedProj.name} (${matchedProj.location || 'N/A'})` 
+        : siteName.toUpperCase();
+
+      // Wrap the Project Site name into multiple lines to prevent overlap
+      const siteLines: string[] = doc.splitTextToSize(displaySiteName, 85);
+      siteLines.forEach((line, idx) => {
+        doc.text(line, 14, 49 + idx * 4);
+      });
+
+      doc.text(type.toUpperCase() === "DAILY" ? "DAILY REPORT" : "MONTHLY REPORT", 110, 49);
+      doc.text(dateOrMonth, 200, 49);
 
       if (type === "daily") {
         const monitoringRecord = pullOutMonitoringRecords.find(r => 
@@ -4028,8 +4221,8 @@ export default function App() {
                                   icon={<MapPin className="h-3.5 w-3.5 text-slate-400" />}
                                   placeholder="Select or search destination site..."
                                   options={(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).map(pc => ({
-                                    value: pc.location || pc.code,
-                                    label: pc.name,
+                                    value: pc.code,
+                                    label: `${pc.code} - ${pc.name}`,
                                     sublabel: pc.location
                                   }))}
                                   value={formData.pullOutSite}
@@ -4430,10 +4623,362 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Pull-Out Management Hub</h3>
-                  <p className="text-[10px] text-slate-400 font-mono">Verify relocation status of workers in the Verification Portal</p>
+                  <p className="text-[10px] text-slate-400 font-mono">Select, track, and verify relocated workers</p>
                 </div>
               </div>
+
+              {/* Sub tabs to toggle between Select Labors Hub and Attendance Verification */}
+              <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200/50 self-start sm:self-center">
+                <button
+                  type="button"
+                  onClick={() => setActivePullOutSection("select_labors")}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    activePullOutSection === "select_labors"
+                      ? "bg-[#0F172A] text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Users className="h-3.5 w-3.5" /> Select Labors Hub
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivePullOutSection("verification")}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    activePullOutSection === "verification"
+                      ? "bg-[#0F172A] text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <ClipboardCheck className="h-3.5 w-3.5" /> Attendance Verification
+                </button>
+              </div>
             </div>
+
+            {/* SELECT LABORS HUB SECTION */}
+            {activePullOutSection === "select_labors" && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                
+                {/* Left Controls Card: Date and Destination Project selection */}
+                <div className="lg:col-span-4 bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm space-y-5">
+                  <div className="border-b border-slate-100 pb-3 mb-2">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                      <Settings className="h-4 w-4 text-slate-500" /> Relocation Settings
+                    </h4>
+                  </div>
+
+                  {/* Relocation Date Input */}
+                  <div className="flex flex-col">
+                    <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase mb-1.5">
+                      1. Select Relocation Date *
+                    </label>
+                    <input
+                      type="date"
+                      value={selectedPullOutDate}
+                      onChange={(e) => setSelectedPullOutDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all font-mono"
+                    />
+                  </div>
+
+                  {/* Destination Site Dropdown */}
+                  <div className="flex flex-col">
+                    <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase mb-1.5">
+                      2. Choose Destination Site *
+                    </label>
+                    <select
+                      value={destinationSite}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setDestinationSite(val);
+                        setSelectedPullOutSite(val);
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all uppercase"
+                    >
+                      <option value="">-- Choose Target Project / Site --</option>
+                      {(projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES).map(pc => (
+                        <option key={pc.code} value={pc.code}>
+                          {pc.code} - {pc.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Reason for Relocation */}
+                  <div className="flex flex-col">
+                    <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase mb-1.5">
+                      3. Reason for Relocation
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. For plastering, urgent backup, etc."
+                      value={hubPullOutReason}
+                      onChange={(e) => setHubPullOutReason(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl py-2.5 px-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 transition-all uppercase font-sans"
+                    />
+                  </div>
+
+                  {/* Summary info and action button */}
+                  <div className="bg-indigo-50/50 rounded-2xl p-4 border border-indigo-100/60 space-y-3.5">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                      <span>Selected Labors:</span>
+                      <span className="font-mono bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-full text-[10px]">
+                        {selectedLaborIds.length} Selected
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveSelectedPullOuts}
+                      disabled={isSavingPullOuts || selectedLaborIds.length === 0 || !destinationSite}
+                      className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      {isSavingPullOuts ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" /> Saving Relocations...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="h-4 w-4" /> Save &amp; Relocate
+                        </>
+                      )}
+                    </button>
+                    <p className="text-[9px] text-slate-400 font-medium leading-relaxed text-center">
+                      Saving automatically links these labors to the Verification Portal on the selected date.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Right Workspace Card: Labors Directory List & Inline Add Labor Form */}
+                <div className="lg:col-span-8 bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm min-h-[400px] space-y-6">
+                  
+                  {/* Title and Inline Add Labor trigger */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                        <Users className="h-4 w-4 text-slate-500" /> Labors Master Directory
+                      </h4>
+                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">Select the workers to assign to the destination site.</p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingLaborInline(!isAddingLaborInline);
+                        setInlineLaborError("");
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer border ${
+                        isAddingLaborInline
+                          ? "bg-slate-100 text-slate-700 border-slate-200"
+                          : "bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100/80"
+                      }`}
+                    >
+                      {isAddingLaborInline ? (
+                        <>Cancel</>
+                      ) : (
+                        <>
+                          <Plus className="h-3.5 w-3.5" /> Add Labor
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Inline Add Labor Form */}
+                  {isAddingLaborInline && (
+                    <form onSubmit={handleSaveInlineLabor} className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 space-y-4 animate-slide-in">
+                      <div className="text-xs font-bold text-slate-700 uppercase tracking-tight font-mono">Add New Labor to Directory</div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Labor Code *</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. BL050"
+                            value={inlineLaborCode}
+                            onChange={(e) => setInlineLaborCode(e.target.value.toUpperCase())}
+                            className="w-full bg-white border border-slate-200 hover:border-slate-300 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 uppercase"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Labor Name *</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. JOHN DOE"
+                            value={inlineLaborName}
+                            onChange={(e) => setInlineLaborName(e.target.value.toUpperCase())}
+                            className="w-full bg-white border border-slate-200 hover:border-slate-300 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 uppercase"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Designation</label>
+                          <select
+                            value={inlineLaborDesignation}
+                            onChange={(e) => setInlineLaborDesignation(e.target.value)}
+                            className="w-full bg-white border border-slate-200 hover:border-slate-300 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800 uppercase"
+                          >
+                            {DESIGNATIONS.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                            <option value="OTHER">OTHER</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {inlineLaborError && (
+                        <p className="text-[10px] text-rose-500 font-semibold">{inlineLaborError}</p>
+                      )}
+
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsAddingLaborInline(false)}
+                          className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-[10px] font-bold uppercase transition-all"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={isSavingInlineLabor}
+                          className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold uppercase transition-all flex items-center gap-1"
+                        >
+                          {isSavingInlineLabor ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save Labor"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Search bar and Select All option */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 border border-slate-150 rounded-2xl p-4">
+                    {/* Search Field */}
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search labor by name or code..."
+                        value={laborSearchQuery}
+                        onChange={(e) => setLaborSearchQuery(e.target.value)}
+                        className="w-full bg-white border border-slate-200 hover:border-slate-300 rounded-xl py-2.5 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-semibold text-slate-800"
+                      />
+                    </div>
+
+                    {/* Checkbox counters / helpers */}
+                    {(() => {
+                      const list = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                      const filtered = list.filter(lc => 
+                        lc.name.toLowerCase().includes(laborSearchQuery.toLowerCase()) || 
+                        lc.code.toLowerCase().includes(laborSearchQuery.toLowerCase())
+                      );
+                      const filteredIds = filtered.map(lc => lc.id || lc.code);
+                      const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedLaborIds.includes(id));
+
+                      return (
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (allFilteredSelected) {
+                                setSelectedLaborIds(prev => prev.filter(id => !filteredIds.includes(id)));
+                              } else {
+                                setSelectedLaborIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:text-slate-800 cursor-pointer shadow-2xs"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={allFilteredSelected}
+                              readOnly
+                              className="h-3 w-3 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 pointer-events-none"
+                            />
+                            Select All Filtered
+                          </button>
+                          
+                          {selectedLaborIds.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedLaborIds([])}
+                              className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase tracking-wider"
+                            >
+                              Clear Selection
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Directory Labors List */}
+                  <div className="border border-slate-100 rounded-2xl overflow-hidden">
+                    <div className="bg-slate-50 px-4 py-2 text-[10px] font-black uppercase text-slate-400 tracking-wider border-b border-slate-100 grid grid-cols-12 gap-4">
+                      <span className="col-span-1 text-center">Select</span>
+                      <span className="col-span-2">Labor Code</span>
+                      <span className="col-span-6">Worker Name</span>
+                      <span className="col-span-3">Designation</span>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
+                      {(() => {
+                        const list = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+                        const filtered = list.filter(lc => 
+                          lc.name.toLowerCase().includes(laborSearchQuery.toLowerCase()) || 
+                          lc.code.toLowerCase().includes(laborSearchQuery.toLowerCase())
+                        );
+
+                        if (filtered.length === 0) {
+                          return (
+                            <div className="p-12 text-center text-slate-400">
+                              <Users className="h-10 w-10 text-slate-300 mx-auto mb-2" />
+                              <p className="text-xs font-semibold">No labors found matching search criteria.</p>
+                            </div>
+                          );
+                        }
+
+                        return filtered.map((lc) => {
+                          const id = lc.id || lc.code;
+                          const isSelected = selectedLaborIds.includes(id);
+
+                          return (
+                            <div
+                              key={id}
+                              onClick={() => {
+                                setSelectedLaborIds(prev => 
+                                  prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+                                );
+                              }}
+                              className={`px-4 py-3 grid grid-cols-12 gap-4 items-center transition-all cursor-pointer hover:bg-slate-50/70 ${
+                                isSelected ? "bg-indigo-50/20" : ""
+                              }`}
+                            >
+                              <div className="col-span-1 flex justify-center">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}} // Handled by outer click
+                                  className="h-3.5 w-3.5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 pointer-events-none"
+                                />
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-[10px] font-black font-mono bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-700">
+                                  {lc.code}
+                                </span>
+                              </div>
+                              <div className="col-span-6">
+                                <span className="text-xs font-bold text-slate-800 uppercase tracking-tight block truncate font-sans">
+                                  {lc.name}
+                                </span>
+                              </div>
+                              <div className="col-span-3">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight bg-slate-100/50 px-2.5 py-1 rounded-full border border-slate-200/40 inline-block">
+                                  {lc.designation || "HELPER"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* VERIFICATION PORTAL SECTION */}
             {activePullOutSection === "verification" && (
@@ -4789,7 +5334,7 @@ export default function App() {
                           ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
                           ...pullOutMonitoringRecords.map(r => r.site)
                         ].map(s => s.toUpperCase().trim()))).filter(Boolean).map(site => (
-                          <option key={site} value={site}>{site}</option>
+                          <option key={site} value={site}>{getProjectAndSiteForVerification(site)}</option>
                         ))}
                       </select>
                     </div>
@@ -5011,7 +5556,7 @@ export default function App() {
                                           )}
                                         </div>
                                         <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight block truncate font-sans group-hover:text-indigo-600 transition-colors">
-                                          {site}
+                                          {getProjectAndSiteForVerification(site)}
                                         </h5>
                                       </div>
                                       <div className="flex items-center gap-1.5 shrink-0">
@@ -5255,7 +5800,7 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-200/60 text-xs">
                       <div>
                         <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Target Project Site</span>
-                        <strong className="text-slate-800 uppercase font-bold text-[11px] block mt-0.5">{reportSelectedSite}</strong>
+                        <strong className="text-slate-800 uppercase font-bold text-[11px] block mt-0.5">{getProjectAndSiteForVerification(reportSelectedSite)}</strong>
                       </div>
                       <div>
                         <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Generated For</span>
