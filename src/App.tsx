@@ -2853,7 +2853,7 @@ export default function App() {
       const tableRows = records.map((s, idx) => [
         idx + 1,
         s.activityName || "-",
-        s.workCompletedPercent ? `${s.workCompletedPercent}%` : "0%",
+        "", // Drawn customly with a beautiful visual Progress Indicator bar in didDrawCell
         s.targetDate || "-",
         s.workCompletedTodayPercent ? `+${s.workCompletedTodayPercent}%` : "-",
         s.noOfLaborSubcontractor || "-",
@@ -2924,6 +2924,62 @@ export default function App() {
           }
         },
         didDrawCell: (data: any) => {
+          if (data.column.index === 2 && data.cell.section === "body" && data.row.index < records.length) {
+            // Draw progress bar for % WORK COMPLETED (CUMULATIVE)
+            const logEntry = records[data.row.index];
+            const rawPercent = logEntry ? logEntry.workCompletedPercent : "";
+            const cumVal = parseFloat(rawPercent || "0");
+            const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+            
+            const cellX = data.cell.x;
+            const cellY = data.cell.y;
+            const cellWidth = data.cell.width;
+            const cellHeight = data.cell.height;
+
+            // Dimensions (for a spacious 24mm width column style)
+            const barWidth = 11;
+            const gap = 1.5;
+            const barHeight = 2.2;
+            const fontSize = 7.5;
+
+            // 1. Draw background track of progress bar (slate-100 capsule)
+            doc.setFillColor(241, 245, 249); // slate-100
+            doc.setDrawColor(226, 232, 240); // slate-200
+            doc.setLineWidth(0.1);
+
+            const textStr = `${cleanCum}%`;
+            doc.setFont("Helvetica", "bold");
+            doc.setFontSize(fontSize);
+            doc.setTextColor(51, 65, 85); // slate-700
+            const textWidth = doc.getTextWidth(textStr);
+
+            const totalContentWidth = barWidth + gap + textWidth;
+            const startX = cellX + (cellWidth - totalContentWidth) / 2;
+            const barStartY = cellY + (cellHeight - barHeight) / 2;
+
+            if (typeof (doc as any).roundedRect === "function") {
+              (doc as any).roundedRect(startX, barStartY, barWidth, barHeight, 0.6, 0.6, "FD");
+            } else {
+              doc.rect(startX, barStartY, barWidth, barHeight, "FD");
+            }
+
+            // 2. Draw active progress portion (emerald-500, amber-500, or blue-500)
+            if (cleanCum > 0) {
+              const activeWidth = (cleanCum / 100) * barWidth;
+              const barColor = cleanCum === 100 ? [16, 185, 129] : cleanCum > 50 ? [245, 158, 11] : [59, 130, 246];
+              doc.setFillColor(barColor[0], barColor[1], barColor[2]);
+              if (typeof (doc as any).roundedRect === "function") {
+                (doc as any).roundedRect(startX, barStartY, activeWidth, barHeight, 0.6, 0.6, "F");
+              } else {
+                doc.rect(startX, barStartY, activeWidth, barHeight, "F");
+              }
+            }
+
+            // 3. Draw text right next to progress bar
+            const textStartY = cellY + (cellHeight / 2) + 0.8;
+            doc.text(textStr, startX + barWidth + gap, textStartY);
+          }
+
           if (data.column.index === 8 && data.cell.section === "body") {
             const logEntry = records[data.row.index];
             if (logEntry?.images && logEntry.images.length > 0) {
@@ -3216,7 +3272,7 @@ export default function App() {
         s.siteEngineer || "-",
         s.activityName || "-",
         s.targetDate || "-",
-        s.workCompletedPercent ? `${s.workCompletedPercent}%` : "-",
+        "", // Drawn customly with a beautiful visual Progress Indicator bar in didDrawCell
         s.workCompletedTodayPercent ? `${s.workCompletedTodayPercent}%` : "-",
         s.noOfLaborSubcontractor || "-",
         s.equipment || "-",
@@ -3244,14 +3300,14 @@ export default function App() {
           fillColor: [248, 250, 252] as [number, number, number] // slate-50
         },
         columnStyles: {
-          0: { cellWidth: 15 }, // Date
-          1: { cellWidth: 18 }, // Project
-          2: { cellWidth: 22 }, // Site Eng
+          0: { cellWidth: 14 }, // Date
+          1: { cellWidth: 16 }, // Project
+          2: { cellWidth: 20 }, // Site Eng
           3: { cellWidth: 32 }, // Activity
-          4: { cellWidth: 18 }, // Target Date
-          5: { cellWidth: 14 }, // Cumulative %
-          6: { cellWidth: 14 }, // Today %
-          7: { cellWidth: 12 }, // Labors
+          4: { cellWidth: 16 }, // Target Date
+          5: { cellWidth: 22 }, // Cumulative %
+          6: { cellWidth: 13 }, // Today %
+          7: { cellWidth: 11 }, // Labors
           8: { cellWidth: 22 }, // Equipment
           9: { cellWidth: 28 }, // Remarks
           10: { cellWidth: 82 } // Pictures (wide so images are larger!)
@@ -3274,6 +3330,62 @@ export default function App() {
           }
         },
         didDrawCell: (data: any) => {
+          if (data.column.index === 5 && data.cell.section === "body") {
+            // Draw progress bar for CUMULATIVE %
+            const logEntry = filteredLogs[data.row.index];
+            const rawPercent = logEntry ? logEntry.workCompletedPercent : "";
+            const cumVal = parseFloat(rawPercent || "0");
+            const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+            
+            const cellX = data.cell.x;
+            const cellY = data.cell.y;
+            const cellWidth = data.cell.width;
+            const cellHeight = data.cell.height;
+
+            // Dimensions (for a spacious 22mm width column style)
+            const barWidth = 10;
+            const gap = 1.5;
+            const barHeight = 2.2;
+            const fontSize = 7.5;
+
+            // 1. Draw background track of progress bar (slate-100 capsule)
+            doc.setFillColor(241, 245, 249); // slate-100
+            doc.setDrawColor(226, 232, 240); // slate-200
+            doc.setLineWidth(0.1);
+
+            const textStr = `${cleanCum}%`;
+            doc.setFont("Helvetica", "bold");
+            doc.setFontSize(fontSize);
+            doc.setTextColor(51, 65, 85); // slate-700
+            const textWidth = doc.getTextWidth(textStr);
+
+            const totalContentWidth = barWidth + gap + textWidth;
+            const startX = cellX + (cellWidth - totalContentWidth) / 2;
+            const barStartY = cellY + (cellHeight - barHeight) / 2;
+
+            if (typeof (doc as any).roundedRect === "function") {
+              (doc as any).roundedRect(startX, barStartY, barWidth, barHeight, 0.6, 0.6, "FD");
+            } else {
+              doc.rect(startX, barStartY, barWidth, barHeight, "FD");
+            }
+
+            // 2. Draw active progress portion (emerald-500, amber-500, or blue-500)
+            if (cleanCum > 0) {
+              const activeWidth = (cleanCum / 100) * barWidth;
+              const barColor = cleanCum === 100 ? [16, 185, 129] : cleanCum > 50 ? [245, 158, 11] : [59, 130, 246];
+              doc.setFillColor(barColor[0], barColor[1], barColor[2]);
+              if (typeof (doc as any).roundedRect === "function") {
+                (doc as any).roundedRect(startX, barStartY, activeWidth, barHeight, 0.6, 0.6, "F");
+              } else {
+                doc.rect(startX, barStartY, activeWidth, barHeight, "F");
+              }
+            }
+
+            // 3. Draw text right next to progress bar
+            const textStartY = cellY + (cellHeight / 2) + 0.8;
+            doc.text(textStr, startX + barWidth + gap, textStartY);
+          }
+
           if (data.column.index === 10 && data.cell.section === "body") {
             const logEntry = filteredLogs[data.row.index];
             if (logEntry?.images && logEntry.images.length > 0) {
