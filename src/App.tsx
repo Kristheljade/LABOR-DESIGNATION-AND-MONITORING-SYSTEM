@@ -617,6 +617,9 @@ export default function App() {
   const [submitSuccess, setSubmitSuccess] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string>("");
   const [lastSubmittedName, setLastSubmittedName] = useState<string>("");
+  const [lastSubmittedDate, setLastSubmittedDate] = useState<string>("");
+  const [isViewSavedLaborsOpen, setIsViewSavedLaborsOpen] = useState<boolean>(false);
+  const [savedLaborsSearchTerm, setSavedLaborsSearchTerm] = useState<string>("");
 
   // Admin logs state
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -2002,6 +2005,11 @@ export default function App() {
       });
 
       if (res.ok) {
+        const resData = await res.json().catch(() => ({}));
+        if (resData.entry) {
+          setSubmissions(prev => [resData.entry, ...prev.filter(s => s.id !== resData.entry.id)]);
+        }
+        setLastSubmittedDate(payload.date || formData.date);
         setSubmitSuccess(true);
         setLastSubmittedName(activeFormTab === "attendance" ? payload.laborsName : payload.activityName);
         setFormImages([]); // Reset uploaded pictures
@@ -2240,24 +2248,31 @@ export default function App() {
 
       // Header Brand bar styling
       doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
-      doc.rect(0, 0, 297, 40, "F");
+      doc.rect(0, 0, 297, 42, "F");
 
       // Corporate Header Texts
       doc.setTextColor(255, 255, 255);
       doc.setFont("Helvetica", "bold");
-      doc.setFontSize(15);
-      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 14);
+      doc.setFontSize(14);
+      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 12);
 
       doc.setFont("Helvetica", "normal");
-      doc.setFontSize(10);
+      doc.setFontSize(9.5);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text("LABOR MONITORING & DESIGNATION SYSTEM", 15, 22);
-      doc.text("DOCUMENT CONTROLLER SECURE LEDGER LOGS", 15, 27);
+      doc.text("LABOR MONITORING & DESIGNATION SYSTEM", 15, 18);
+      doc.text("DOCUMENT CONTROLLER SECURE LEDGER LOGS", 15, 23);
 
       doc.setFont("Helvetica", "italic");
       doc.setFontSize(8);
       doc.setTextColor(148, 163, 184); // slate-400
-      doc.text("System Record Clerk: KRISTHEL JADE OCDE", 15, 34);
+      doc.text("System Record Clerk: KRISTHEL JADE OCDE", 15, 29);
+
+      // Determine site engineer automatically based on records / project / form
+      const engineers = Array.from(new Set(records.map(r => r.siteEngineer).filter(Boolean)));
+      const engineerName = engineers.length > 0 
+        ? engineers.join(", ") 
+        : (formData.siteEngineer || "N/A");
+      doc.text(`System Record Engineer: ${engineerName}`, 15, 34);
 
       // Section label inside white canvas
       doc.setTextColor(15, 23, 42); // slate-900
@@ -2600,24 +2615,30 @@ export default function App() {
 
       // Header Brand bar styling
       doc.setFillColor(15, 23, 42); // slate-900 (#0F172A)
-      doc.rect(0, 0, 297, 40, "F");
+      doc.rect(0, 0, 297, 42, "F");
 
       // Corporate Header Texts
       doc.setTextColor(255, 255, 255);
       doc.setFont("Helvetica", "bold");
-      doc.setFontSize(15);
-      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 14);
+      doc.setFontSize(14);
+      doc.text("BIN LAHEJ GENERAL MAINTENANCE & CONTRACTING L.L.C", 15, 12);
 
       doc.setFont("Helvetica", "normal");
-      doc.setFontSize(10);
+      doc.setFontSize(9.5);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text("LABOR MONITORING & DESIGNATION SYSTEM", 15, 22);
-      doc.text("DOCUMENT CONTROLLER SECURE LEDGER LOGS", 15, 27);
+      doc.text("LABOR MONITORING & DESIGNATION SYSTEM", 15, 18);
+      doc.text("DOCUMENT CONTROLLER SECURE LEDGER LOGS", 15, 23);
 
       doc.setFont("Helvetica", "italic");
       doc.setFontSize(8);
       doc.setTextColor(148, 163, 184); // slate-400
-      doc.text("System Record Clerk: KRISTHEL JADE OCDE", 15, 34);
+      doc.text("System Record Clerk: KRISTHEL JADE OCDE", 15, 29);
+
+      const engineers = Array.from(new Set(filteredSubmissions.map(s => s.siteEngineer).filter(Boolean)));
+      const engineerName = engineers.length > 0 
+        ? engineers.join(", ") 
+        : (formData.siteEngineer || "N/A");
+      doc.text(`System Record Engineer: ${engineerName}`, 15, 34);
 
       // Section label inside white canvas
       doc.setTextColor(15, 23, 42); // slate-900
@@ -4031,13 +4052,45 @@ export default function App() {
                     )}
                   </p>
                   
-                  <div className="mt-8 flex flex-col sm:flex-row gap-3">
+                  <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 flex-wrap">
                     <button
                       id="log-another-btn"
                       onClick={() => setSubmitSuccess(false)}
-                      className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-sm font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 border border-transparent text-sm font-semibold rounded-xl text-white bg-slate-900 hover:bg-slate-800 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
                     >
+                      <PlusCircle className="h-4 w-4" />
                       {activeFormTab === "attendance" ? "Log Another Labor Record" : "Log Another Progress Record"}
+                    </button>
+
+                    <button
+                      id="view-saved-labors-btn"
+                      onClick={() => setIsViewSavedLaborsOpen(true)}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 border border-slate-300 text-sm font-semibold rounded-xl text-slate-800 bg-white hover:bg-slate-50 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
+                    >
+                      <Users className="h-4 w-4 text-slate-600" />
+                      View All Selected Labors
+                    </button>
+
+                    <button
+                      id="export-saved-labors-pdf-btn"
+                      onClick={() => {
+                        const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
+                        const dayRecords = submissions.filter(s => s.date === targetDate && (s.laborsName || s.activityName));
+                        if (dayRecords.length === 0) {
+                          showNotification("Warning", "No saved records found for this date.", "info");
+                          return;
+                        }
+                        exportSpecificRecordsToPDF(
+                          dayRecords,
+                          `DAILY LABOR ATTENDANCE REPORT (${targetDate})`,
+                          `Daily_Labor_Attendance_${targetDate}.pdf`
+                        );
+                        showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records.`, "success");
+                      }}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 border border-rose-200 text-sm font-semibold rounded-xl text-rose-700 bg-rose-50/80 hover:bg-rose-100 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
+                    >
+                      <FileText className="h-4 w-4 text-rose-600" />
+                      Export to PDF
                     </button>
                   </div>
                 </div>
@@ -10663,6 +10716,233 @@ export default function App() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* VIEW ALL SELECTED LABORS MODAL */}
+      {isViewSavedLaborsOpen && (
+        <div id="view-saved-labors-modal" className="fixed inset-0 z-55 flex items-center justify-center p-4 sm:p-6 md:p-10 bg-slate-900/75 backdrop-blur-md animate-fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-6xl w-full h-[90vh] md:h-[85vh] flex flex-col overflow-hidden transform scale-100 transition-all animate-slide-in">
+            
+            {/* Modal Header */}
+            <div className="bg-[#0F172A] p-5 md:p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                  <Users className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2">
+                    Saved Labor Records for Today
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">
+                      {lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0]}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">
+                    Review submitted labor details for current day before returning to database
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons in Modal Header */}
+              <div className="flex items-center gap-2">
+                <button
+                  id="modal-export-pdf-btn"
+                  onClick={() => {
+                    const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
+                    const dayRecords = submissions.filter(s => s.date === targetDate && (s.laborsName || s.activityName));
+                    if (dayRecords.length === 0) {
+                      showNotification("Warning", "No saved records found for this date.", "info");
+                      return;
+                    }
+                    exportSpecificRecordsToPDF(
+                      dayRecords,
+                      `DAILY LABOR ATTENDANCE REPORT (${targetDate})`,
+                      `Daily_Labor_Attendance_${targetDate}.pdf`
+                    );
+                    showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records.`, "success");
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors shadow-sm"
+                >
+                  <FileText className="h-3.5 w-3.5" /> Export PDF
+                </button>
+                <button
+                  id="modal-close-btn"
+                  onClick={() => setIsViewSavedLaborsOpen(false)}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Toolbar */}
+            <div className="bg-slate-50 p-4 border-b border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+              <div className="relative w-full sm:w-80">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  id="search-saved-labors-input"
+                  type="text"
+                  placeholder="Filter by worker name, trade, task..."
+                  value={savedLaborsSearchTerm}
+                  onChange={(e) => setSavedLaborsSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-700"
+                />
+              </div>
+              
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                <span className="bg-white px-3 py-1 rounded-lg border border-slate-200 text-slate-700 font-mono text-2xs font-bold">
+                  {
+                    submissions.filter(s => {
+                      const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
+                      return s.date === targetDate && (s.laborsName || s.activityName);
+                    }).length
+                  } Total Saved Records
+                </span>
+              </div>
+            </div>
+
+            {/* Modal Content / Table */}
+            <div className="flex-1 overflow-auto p-4 md:p-6">
+              {(() => {
+                const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
+                let dayRecords = submissions.filter(s => s.date === targetDate && (s.laborsName || s.activityName));
+
+                if (savedLaborsSearchTerm.trim()) {
+                  const q = savedLaborsSearchTerm.toLowerCase();
+                  dayRecords = dayRecords.filter(r => 
+                    (r.laborsName && r.laborsName.toLowerCase().includes(q)) ||
+                    (r.designation && r.designation.toLowerCase().includes(q)) ||
+                    (r.reassignedTask && r.reassignedTask.toLowerCase().includes(q)) ||
+                    (r.siteEngineer && r.siteEngineer.toLowerCase().includes(q)) ||
+                    (r.project && r.project.toLowerCase().includes(q))
+                  );
+                }
+
+                if (dayRecords.length === 0) {
+                  return (
+                    <div className="py-16 text-center flex flex-col items-center justify-center">
+                      <div className="bg-slate-100 p-4 rounded-full text-slate-400 mb-3">
+                        <Users className="h-10 w-10" />
+                      </div>
+                      <h4 className="text-base font-bold text-slate-700">No Labor Records Found</h4>
+                      <p className="text-slate-500 text-xs mt-1 max-w-sm">
+                        {savedLaborsSearchTerm ? "No entries match your search query." : `No saved labor entries logged for date ${targetDate}.`}
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200/80 shadow-sm">
+                    <table className="w-full text-left border-collapse bg-white">
+                      <thead>
+                        <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
+                          <th className="py-3 px-3.5 text-center w-12 border-b border-slate-800">#</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">Labor's Name</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">Trade / Designation</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">Project / Location</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">Site Engineer</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">Reassigned Task</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">Attendance Status & Details</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
+                        {dayRecords.map((r, idx) => (
+                          <tr key={r.id || idx} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-3 px-3.5 text-center font-mono font-bold text-slate-400 border-r border-slate-100">
+                              {idx + 1}
+                            </td>
+                            <td className="py-3 px-3.5 font-bold text-slate-900 uppercase">
+                              {r.laborsName || r.activityName || "-"}
+                            </td>
+                            <td className="py-3 px-3.5 font-medium text-slate-600 uppercase">
+                              {r.designation || "-"}
+                            </td>
+                            <td className="py-3 px-3.5 font-medium text-slate-700 uppercase">
+                              <span className="font-bold text-slate-900">{r.project || "-"}</span>
+                              {r.projectLocation ? <span className="text-slate-400 text-2xs block">{r.projectLocation}</span> : null}
+                            </td>
+                            <td className="py-3 px-3.5 text-slate-600 uppercase">
+                              {r.siteEngineer || "-"}
+                            </td>
+                            <td className="py-3 px-3.5 text-slate-800 font-medium uppercase max-w-xs">
+                              {r.reassignedTask || r.remarks || "-"}
+                            </td>
+                            <td className="py-3 px-3.5">
+                              {r.isPullOut ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-amber-100 text-amber-900 border border-amber-200">
+                                    PULL OUT → {r.pullOutSite || "N/A"}
+                                  </span>
+                                  {r.pullOutTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.pullOutTime}</div>}
+                                  {r.pullOutReason && <div className="text-2xs text-slate-500 italic">Reason: {r.pullOutReason}</div>}
+                                </div>
+                              ) : r.attendanceStatus === "Absent" ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                    ABSENT
+                                  </span>
+                                  {(r.absentReason || r.absentReasonOther) && (
+                                    <div className="text-2xs text-slate-500">
+                                      Reason: {r.absentReason === "Others" ? r.absentReasonOther : r.absentReason}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : r.attendanceStatus === "Under Time" ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                    UNDER TIME
+                                  </span>
+                                  {r.underTimeTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.underTimeTime}</div>}
+                                  {(r.underTimeReason || r.underTimeReasonOther) && (
+                                    <div className="text-2xs text-slate-500">
+                                      Reason: {r.underTimeReason === "Others" ? r.underTimeReasonOther : r.underTimeReason}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  PRESENT
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-50 p-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+              <p className="text-xs text-slate-500 font-medium">
+                Reviewing records for date <strong className="text-slate-900 font-mono">{lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0]}</strong>
+              </p>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  id="modal-log-another-btn"
+                  onClick={() => {
+                    setIsViewSavedLaborsOpen(false);
+                    setSubmitSuccess(false);
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-900 text-xs font-semibold rounded-xl text-white bg-slate-900 hover:bg-slate-800 cursor-pointer transition-all"
+                >
+                  <PlusCircle className="h-3.5 w-3.5" /> Log Another Labor Record
+                </button>
+                <button
+                  id="modal-footer-close-btn"
+                  onClick={() => setIsViewSavedLaborsOpen(false)}
+                  className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold rounded-xl text-slate-600 bg-white hover:bg-slate-100 cursor-pointer transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+          </div>
         </div>
       )}
 
