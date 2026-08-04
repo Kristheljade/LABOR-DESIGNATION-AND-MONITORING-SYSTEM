@@ -2291,73 +2291,260 @@ export default function App() {
       doc.text(`Generated Date: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`, 15, 62);
       doc.text(`Total Records Included: ${records.length}`, 15, 67);
 
-      // Setup table parameters
-      const tableColumns = [
-        "DATE",
-        "PROJECT",
-        "LABOR'S NAME",
-        "TRADE / DESIGNATION",
-        "SITE LOCATION",
-        "SITE ENGINEER",
-        "ASSIGNED TASK",
-        "ATTENDANCE"
-      ];
+      // Determine if this is a Progress Monitoring report or Labor Attendance report
+      const isProgressReport = records.length > 0 && records.some(r => Boolean(r.activityName) || Boolean(r.images && r.images.length > 0));
 
-      const tableRows = records.map((s) => [
-        s.date,
-        s.project || "-",
-        s.laborsName || "-",
-        s.designation || "-",
-        s.projectLocation || "-",
-        s.siteEngineer || "-",
-        s.reassignedTask || "-",
-        s.attendanceStatus || "Present"
-      ]);
+      if (isProgressReport) {
+        const tableColumns = [
+          "S/NO.",
+          "NAME OF ACTIVITY",
+          "% WORK COMPLETED (CUMULATIVE)",
+          "TARGET DATE",
+          "WORK COMPLETED TODAY",
+          "NO. LABOR / SUBCONTRACTOR",
+          "EQUIPMENT",
+          "REMARKS",
+          "PICTURES"
+        ];
 
-      const tableOptions = {
-        head: [tableColumns],
-        body: tableRows,
-        startY: 74,
-        theme: "striped" as const,
-        headStyles: {
-          fillColor: [15, 23, 42] as [number, number, number], // slate-900 (#0F172A)
-          textColor: [255, 255, 255] as [number, number, number],
-          fontSize: 8,
-          fontStyle: "bold" as const,
-          halign: "left" as const
-        },
-        bodyStyles: {
-          fontSize: 8,
-          textColor: [51, 65, 85] as [number, number, number] // slate-700
-        },
-        alternateRowStyles: {
-          fillColor: [248, 250, 252] as [number, number, number] // slate-50
-        },
-        columnStyles: {
-          0: { cellWidth: 24 }, // Date
-          1: { cellWidth: 38 }, // Project
-          2: { cellWidth: 38 }, // Labor Name
-          3: { cellWidth: 32 }, // Trade/Designation
-          4: { cellWidth: 32 }, // Location
-          5: { cellWidth: 32 }, // Engineer
-          6: { cellWidth: 38 }, // Assigned Task
-          7: { cellWidth: 33 }  // Attendance
-        },
-        styles: {
-          cellPadding: 2.5,
-          lineColor: [226, 232, 240] as [number, number, number], // slate-200
-          lineWidth: 0.1,
-          font: "Helvetica"
-        },
-        margin: { left: 15, right: 15 }
-      };
+        const tableRows = records.map((s, idx) => [
+          idx + 1,
+          s.activityName || "-",
+          "", // Drawn customly with visual Progress bar in didDrawCell
+          s.targetDate || "-",
+          s.workCompletedTodayPercent ? `+${s.workCompletedTodayPercent}%` : "-",
+          s.noOfLaborSubcontractor || "-",
+          s.equipment || "-",
+          s.remarks || "-",
+          "" // Empty space for drawings!
+        ]);
 
-      if (typeof autoTableFn === "function") {
-        autoTableFn(doc, tableOptions);
-      } else if (typeof (doc as any).autoTable === "function") {
-        (doc as any).autoTable(tableOptions);
+        const totalLabors = records.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0) || 0;
+        tableRows.push([
+          "",
+          "TOTAL ACTIVITIES: " + records.length,
+          "",
+          "",
+          "",
+          "TOTAL LABORS: " + totalLabors,
+          "",
+          "",
+          ""
+        ]);
+
+        const tableOptions = {
+          startY: 74,
+          head: [tableColumns],
+          body: tableRows,
+          theme: "grid" as const,
+          headStyles: {
+            fillColor: [31, 78, 120] as [number, number, number], // #1F4E78 steel blue
+            textColor: 255,
+            fontSize: 8,
+            fontStyle: "bold" as const,
+            halign: "center" as const
+          },
+          bodyStyles: {
+            fontSize: 8,
+            textColor: 50,
+            valign: "middle" as const,
+            overflow: "linebreak" as const
+          },
+          alternateRowStyles: {
+            fillColor: [248, 250, 252] as [number, number, number]
+          },
+          columnStyles: {
+            0: { cellWidth: 10, halign: "center" as const }, // S/No.
+            1: { cellWidth: 35, fontStyle: "bold" as const }, // Activity Name
+            2: { cellWidth: 24, halign: "center" as const }, // Cumulative
+            3: { cellWidth: 20, halign: "center" as const }, // Target Date
+            4: { cellWidth: 22, halign: "center" as const }, // Today
+            5: { cellWidth: 24, halign: "center" as const }, // Labor
+            6: { cellWidth: 24 }, // Equipment
+            7: { cellWidth: 28 },  // Remarks
+            8: { cellWidth: 80 }  // Pictures
+          },
+          styles: {
+            cellPadding: 2.5,
+            lineColor: [226, 232, 240] as [number, number, number],
+            lineWidth: 0.1,
+            font: "Helvetica"
+          },
+          margin: { left: 15, right: 15 },
+          didParseCell: (data: any) => {
+            if (data.column.index === 8 && data.cell.section === "body" && data.row.index < records.length) {
+              const logEntry = records[data.row.index];
+              if (logEntry?.images && logEntry.images.length > 0) {
+                data.row.height = Math.max(data.row.height, 32);
+              }
+            }
+          },
+          didDrawCell: (data: any) => {
+            if (data.column.index === 2 && data.cell.section === "body" && data.row.index < records.length) {
+              const logEntry = records[data.row.index];
+              const rawPercent = logEntry ? logEntry.workCompletedPercent : "";
+              const cumVal = parseFloat(rawPercent || "0");
+              const cleanCum = isNaN(cumVal) ? 0 : Math.min(100, Math.max(0, cumVal));
+              
+              const cellX = data.cell.x;
+              const cellY = data.cell.y;
+              const cellWidth = data.cell.width;
+              const cellHeight = data.cell.height;
+
+              const barWidth = 11;
+              const gap = 1.5;
+              const barHeight = 2.2;
+              const fontSize = 7.5;
+
+              doc.setFillColor(241, 245, 249);
+              doc.setDrawColor(226, 232, 240);
+              doc.setLineWidth(0.1);
+
+              const textStr = `${cleanCum}%`;
+              doc.setFont("Helvetica", "bold");
+              doc.setFontSize(fontSize);
+              doc.setTextColor(51, 65, 85);
+
+              const totalContentWidth = barWidth + gap + doc.getTextWidth(textStr);
+              const startX = cellX + (cellWidth - totalContentWidth) / 2;
+              const barStartY = cellY + (cellHeight - barHeight) / 2;
+
+              if (typeof (doc as any).roundedRect === "function") {
+                (doc as any).roundedRect(startX, barStartY, barWidth, barHeight, 0.6, 0.6, "FD");
+              } else {
+                doc.rect(startX, barStartY, barWidth, barHeight, "FD");
+              }
+
+              if (cleanCum > 0) {
+                const activeWidth = (cleanCum / 100) * barWidth;
+                const barColor = cleanCum === 100 ? [16, 185, 129] : cleanCum > 50 ? [245, 158, 11] : [59, 130, 246];
+                doc.setFillColor(barColor[0], barColor[1], barColor[2]);
+                if (typeof (doc as any).roundedRect === "function") {
+                  (doc as any).roundedRect(startX, barStartY, activeWidth, barHeight, 0.6, 0.6, "F");
+                } else {
+                  doc.rect(startX, barStartY, activeWidth, barHeight, "F");
+                }
+              }
+
+              const textStartY = cellY + (cellHeight / 2) + 0.8;
+              doc.text(textStr, startX + barWidth + gap, textStartY);
+            }
+
+            if (data.column.index === 8 && data.cell.section === "body" && data.row.index < records.length) {
+              const logEntry = records[data.row.index];
+              if (logEntry?.images && logEntry.images.length > 0) {
+                const imgs = logEntry.images.slice(0, 4);
+                const cellX = data.cell.x;
+                const cellY = data.cell.y;
+                const cellWidth = data.cell.width;
+                const cellHeight = data.cell.height;
+
+                const imgSize = Math.min(cellHeight - 4, 26);
+                const gap = 3;
+                const totalWidth = imgs.length * imgSize + (imgs.length - 1) * gap;
+
+                let startX = cellX + (cellWidth - totalWidth) / 2;
+                if (startX < cellX + 1) startX = cellX + 1;
+                const startY = cellY + (cellHeight - imgSize) / 2;
+
+                imgs.forEach((imgSrc, imgIdx) => {
+                  try {
+                    if (typeof imgSrc === "string" && (imgSrc.startsWith("data:image") || imgSrc.startsWith("http"))) {
+                      let format = "JPEG";
+                      if (imgSrc.includes("png")) format = "PNG";
+                      else if (imgSrc.includes("webp")) format = "WEBP";
+
+                      doc.addImage(
+                        imgSrc,
+                        format,
+                        startX + imgIdx * (imgSize + gap),
+                        startY,
+                        imgSize,
+                        imgSize
+                      );
+                    }
+                  } catch (e) {
+                    console.error("Error embedding image in PDF:", e);
+                  }
+                });
+              }
+            }
+          }
+        };
+
+        if (typeof autoTableFn === "function") {
+          autoTableFn(doc, tableOptions);
+        } else if (typeof (doc as any).autoTable === "function") {
+          (doc as any).autoTable(tableOptions);
+        }
       } else {
-        throw new Error("jsPDF AutoTable is not correctly initialized.");
+        // Setup table parameters for Labor Attendance
+        const tableColumns = [
+          "DATE",
+          "PROJECT",
+          "LABOR'S NAME",
+          "TRADE / DESIGNATION",
+          "SITE LOCATION",
+          "SITE ENGINEER",
+          "ASSIGNED TASK",
+          "ATTENDANCE"
+        ];
+
+        const tableRows = records.map((s) => [
+          s.date,
+          s.project || "-",
+          s.laborsName || "-",
+          s.designation || "-",
+          s.projectLocation || "-",
+          s.siteEngineer || "-",
+          s.reassignedTask || "-",
+          s.attendanceStatus || "Present"
+        ]);
+
+        const tableOptions = {
+          head: [tableColumns],
+          body: tableRows,
+          startY: 74,
+          theme: "striped" as const,
+          headStyles: {
+            fillColor: [15, 23, 42] as [number, number, number], // slate-900 (#0F172A)
+            textColor: [255, 255, 255] as [number, number, number],
+            fontSize: 8,
+            fontStyle: "bold" as const,
+            halign: "left" as const
+          },
+          bodyStyles: {
+            fontSize: 8,
+            textColor: [51, 65, 85] as [number, number, number], // slate-700
+            valign: "middle" as const
+          },
+          alternateRowStyles: {
+            fillColor: [248, 250, 252] as [number, number, number] // slate-50
+          },
+          columnStyles: {
+            0: { cellWidth: 24 }, // Date
+            1: { cellWidth: 38 }, // Project
+            2: { cellWidth: 38 }, // Labor Name
+            3: { cellWidth: 32 }, // Trade/Designation
+            4: { cellWidth: 32 }, // Location
+            5: { cellWidth: 32 }, // Engineer
+            6: { cellWidth: 38 }, // Assigned Task
+            7: { cellWidth: 33 }  // Attendance
+          },
+          styles: {
+            cellPadding: 2.5,
+            lineColor: [226, 232, 240] as [number, number, number], // slate-200
+            lineWidth: 0.1,
+            font: "Helvetica"
+          },
+          margin: { left: 15, right: 15 }
+        };
+
+        if (typeof autoTableFn === "function") {
+          autoTableFn(doc, tableOptions);
+        } else if (typeof (doc as any).autoTable === "function") {
+          (doc as any).autoTable(tableOptions);
+        }
       }
 
       doc.save(pdfFilename);
@@ -4068,22 +4255,23 @@ export default function App() {
                       className="inline-flex items-center justify-center gap-2 px-5 py-3 border border-slate-300 text-sm font-semibold rounded-xl text-slate-800 bg-white hover:bg-slate-50 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
                     >
                       <Users className="h-4 w-4 text-slate-600" />
-                      View All Selected Labors
+                      {activeFormTab === "attendance" ? "View All Selected Labors" : "View All Selected Activities"}
                     </button>
 
                     <button
                       id="export-saved-labors-pdf-btn"
                       onClick={() => {
                         const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                        const dayRecords = submissions.filter(s => s.date === targetDate && (s.laborsName || s.activityName));
+                        const isAttendance = activeFormTab === "attendance";
+                        const dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
                         if (dayRecords.length === 0) {
-                          showNotification("Warning", "No saved records found for this date.", "info");
+                          showNotification("Warning", `No saved ${isAttendance ? "labor" : "activity"} records found for this date.`, "info");
                           return;
                         }
                         exportSpecificRecordsToPDF(
                           dayRecords,
-                          `DAILY LABOR ATTENDANCE REPORT (${targetDate})`,
-                          `Daily_Labor_Attendance_${targetDate}.pdf`
+                          isAttendance ? `DAILY LABOR ATTENDANCE REPORT (${targetDate})` : `DAILY PROGRESS MONITORING REPORT (${targetDate})`,
+                          isAttendance ? `Daily_Labor_Attendance_${targetDate}.pdf` : `Daily_Progress_Monitoring_${targetDate}.pdf`
                         );
                         showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records.`, "success");
                       }}
@@ -10732,13 +10920,13 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2">
-                    Saved Labor Records for Today
+                    {activeFormTab === "attendance" ? "Saved Labor Records for Today" : "Saved Progress Activity Records for Today"}
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">
                       {lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0]}
                     </span>
                   </h3>
                   <p className="text-xs text-slate-400 font-mono mt-0.5">
-                    Review submitted labor details for current day before returning to database
+                    {activeFormTab === "attendance" ? "Review submitted labor details for current day before returning to database" : "Review submitted progress activity details for current day before returning to database"}
                   </p>
                 </div>
               </div>
@@ -10749,15 +10937,16 @@ export default function App() {
                   id="modal-export-pdf-btn"
                   onClick={() => {
                     const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                    const dayRecords = submissions.filter(s => s.date === targetDate && (s.laborsName || s.activityName));
+                    const isAttendance = activeFormTab === "attendance";
+                    const dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
                     if (dayRecords.length === 0) {
-                      showNotification("Warning", "No saved records found for this date.", "info");
+                      showNotification("Warning", `No saved ${isAttendance ? "labor" : "activity"} records found for this date.`, "info");
                       return;
                     }
                     exportSpecificRecordsToPDF(
                       dayRecords,
-                      `DAILY LABOR ATTENDANCE REPORT (${targetDate})`,
-                      `Daily_Labor_Attendance_${targetDate}.pdf`
+                      isAttendance ? `DAILY LABOR ATTENDANCE REPORT (${targetDate})` : `DAILY PROGRESS MONITORING REPORT (${targetDate})`,
+                      isAttendance ? `Daily_Labor_Attendance_${targetDate}.pdf` : `Daily_Progress_Monitoring_${targetDate}.pdf`
                     );
                     showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records.`, "success");
                   }}
@@ -10782,7 +10971,7 @@ export default function App() {
                 <input
                   id="search-saved-labors-input"
                   type="text"
-                  placeholder="Filter by worker name, trade, task..."
+                  placeholder={activeFormTab === "attendance" ? "Filter by worker name, trade, task..." : "Filter by activity name, trade, project..."}
                   value={savedLaborsSearchTerm}
                   onChange={(e) => setSavedLaborsSearchTerm(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-700"
@@ -10794,9 +10983,10 @@ export default function App() {
                   {
                     submissions.filter(s => {
                       const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                      return s.date === targetDate && (s.laborsName || s.activityName);
+                      const isAttendance = activeFormTab === "attendance";
+                      return s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName));
                     }).length
-                  } Total Saved Records
+                  } Total Saved {activeFormTab === "attendance" ? "Labor" : "Activity"} Records
                 </span>
               </div>
             </div>
@@ -10805,13 +10995,16 @@ export default function App() {
             <div className="flex-1 overflow-auto p-4 md:p-6">
               {(() => {
                 const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                let dayRecords = submissions.filter(s => s.date === targetDate && (s.laborsName || s.activityName));
+                const isAttendance = activeFormTab === "attendance";
+                let dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
 
                 if (savedLaborsSearchTerm.trim()) {
                   const q = savedLaborsSearchTerm.toLowerCase();
                   dayRecords = dayRecords.filter(r => 
                     (r.laborsName && r.laborsName.toLowerCase().includes(q)) ||
+                    (r.activityName && r.activityName.toLowerCase().includes(q)) ||
                     (r.designation && r.designation.toLowerCase().includes(q)) ||
+                    (r.noOfLaborSubcontractor && r.noOfLaborSubcontractor.toLowerCase().includes(q)) ||
                     (r.reassignedTask && r.reassignedTask.toLowerCase().includes(q)) ||
                     (r.siteEngineer && r.siteEngineer.toLowerCase().includes(q)) ||
                     (r.project && r.project.toLowerCase().includes(q))
@@ -10824,9 +11017,11 @@ export default function App() {
                       <div className="bg-slate-100 p-4 rounded-full text-slate-400 mb-3">
                         <Users className="h-10 w-10" />
                       </div>
-                      <h4 className="text-base font-bold text-slate-700">No Labor Records Found</h4>
+                      <h4 className="text-base font-bold text-slate-700">
+                        {activeFormTab === "attendance" ? "No Labor Records Found" : "No Activity Records Found"}
+                      </h4>
                       <p className="text-slate-500 text-xs mt-1 max-w-sm">
-                        {savedLaborsSearchTerm ? "No entries match your search query." : `No saved labor entries logged for date ${targetDate}.`}
+                        {savedLaborsSearchTerm ? "No entries match your search query." : (activeFormTab === "attendance" ? `No saved labor entries logged for date ${targetDate}.` : `No saved activity entries logged for date ${targetDate}.`)}
                       </p>
                     </div>
                   );
@@ -10837,13 +11032,19 @@ export default function App() {
                     <table className="w-full text-left border-collapse bg-white">
                       <thead>
                         <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
-                          <th className="py-3 px-3.5 text-center w-12 border-b border-slate-800">#</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">Labor's Name</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">Trade / Designation</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">Project / Location</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">Site Engineer</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">Reassigned Task</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">Attendance Status & Details</th>
+                          <th className="py-3 px-3.5 text-center w-12 border-b border-slate-800">S/NO.</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Labor's Name" : "Name of Activity"}</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Trade / Designation" : "% Work Completed (Cumulative)"}</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Project / Location" : "Target Date"}</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Site Engineer" : "Work Completed Today"}</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Reassigned Task" : "No. Labor / Subcontractor"}</th>
+                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Attendance Status & Details" : "Equipment"}</th>
+                          {activeFormTab === "monitoring" && (
+                            <>
+                              <th className="py-3 px-3.5 border-b border-slate-800">Remarks</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800 text-center min-w-[120px]">Pictures</th>
+                            </>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
@@ -10855,60 +11056,146 @@ export default function App() {
                             <td className="py-3 px-3.5 font-bold text-slate-900 uppercase">
                               {r.laborsName || r.activityName || "-"}
                             </td>
-                            <td className="py-3 px-3.5 font-medium text-slate-600 uppercase">
-                              {r.designation || "-"}
-                            </td>
-                            <td className="py-3 px-3.5 font-medium text-slate-700 uppercase">
-                              <span className="font-bold text-slate-900">{r.project || "-"}</span>
-                              {r.projectLocation ? <span className="text-slate-400 text-2xs block">{r.projectLocation}</span> : null}
-                            </td>
-                            <td className="py-3 px-3.5 text-slate-600 uppercase">
-                              {r.siteEngineer || "-"}
-                            </td>
-                            <td className="py-3 px-3.5 text-slate-800 font-medium uppercase max-w-xs">
-                              {r.reassignedTask || r.remarks || "-"}
-                            </td>
-                            <td className="py-3 px-3.5">
-                              {r.isPullOut ? (
-                                <div className="space-y-0.5">
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-amber-100 text-amber-900 border border-amber-200">
-                                    PULL OUT → {r.pullOutSite || "N/A"}
-                                  </span>
-                                  {r.pullOutTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.pullOutTime}</div>}
-                                  {r.pullOutReason && <div className="text-2xs text-slate-500 italic">Reason: {r.pullOutReason}</div>}
-                                </div>
-                              ) : r.attendanceStatus === "Absent" ? (
-                                <div className="space-y-0.5">
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                                    ABSENT
-                                  </span>
-                                  {(r.absentReason || r.absentReasonOther) && (
-                                    <div className="text-2xs text-slate-500">
-                                      Reason: {r.absentReason === "Others" ? r.absentReasonOther : r.absentReason}
+                            
+                            {activeFormTab === "attendance" ? (
+                              <>
+                                <td className="py-3 px-3.5 font-medium text-slate-600 uppercase">
+                                  {r.designation || "-"}
+                                </td>
+                                <td className="py-3 px-3.5 font-medium text-slate-700 uppercase">
+                                  <span className="font-bold text-slate-900">{r.project || "-"}</span>
+                                  {r.projectLocation ? <span className="text-slate-400 text-2xs block">{r.projectLocation}</span> : null}
+                                </td>
+                                <td className="py-3 px-3.5 text-slate-600 uppercase">
+                                  {r.siteEngineer || "-"}
+                                </td>
+                                <td className="py-3 px-3.5 text-slate-800 font-medium uppercase max-w-xs">
+                                  {r.reassignedTask || r.remarks || "-"}
+                                </td>
+                                <td className="py-3 px-3.5">
+                                  {r.isPullOut ? (
+                                    <div className="space-y-0.5">
+                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-amber-100 text-amber-900 border border-amber-200">
+                                        PULL OUT → {r.pullOutSite || "N/A"}
+                                      </span>
+                                      {r.pullOutTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.pullOutTime}</div>}
+                                      {r.pullOutReason && <div className="text-2xs text-slate-500 italic">Reason: {r.pullOutReason}</div>}
                                     </div>
-                                  )}
-                                </div>
-                              ) : r.attendanceStatus === "Under Time" ? (
-                                <div className="space-y-0.5">
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                    UNDER TIME
-                                  </span>
-                                  {r.underTimeTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.underTimeTime}</div>}
-                                  {(r.underTimeReason || r.underTimeReasonOther) && (
-                                    <div className="text-2xs text-slate-500">
-                                      Reason: {r.underTimeReason === "Others" ? r.underTimeReasonOther : r.underTimeReason}
+                                  ) : r.attendanceStatus === "Absent" ? (
+                                    <div className="space-y-0.5">
+                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                        ABSENT
+                                      </span>
+                                      {(r.absentReason || r.absentReasonOther) && (
+                                        <div className="text-2xs text-slate-500">
+                                          Reason: {r.absentReason === "Others" ? r.absentReasonOther : r.absentReason}
+                                        </div>
+                                      )}
                                     </div>
+                                  ) : r.attendanceStatus === "Under Time" ? (
+                                    <div className="space-y-0.5">
+                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                        UNDER TIME
+                                      </span>
+                                      {r.underTimeTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.underTimeTime}</div>}
+                                      {(r.underTimeReason || r.underTimeReasonOther) && (
+                                        <div className="text-2xs text-slate-500">
+                                          Reason: {r.underTimeReason === "Others" ? r.underTimeReasonOther : r.underTimeReason}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      PRESENT
+                                    </span>
                                   )}
-                                </div>
-                              ) : (
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                  PRESENT
-                                </span>
-                              )}
-                            </td>
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="py-3 px-3.5 font-medium text-slate-700">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-16 h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200 shrink-0">
+                                      <div 
+                                        className={`h-full rounded-full ${
+                                          parseFloat(r.workCompletedPercent || "0") >= 100 
+                                            ? "bg-emerald-500" 
+                                            : parseFloat(r.workCompletedPercent || "0") > 50 
+                                            ? "bg-amber-500" 
+                                            : "bg-blue-500"
+                                        }`} 
+                                        style={{ width: `${Math.min(100, Math.max(0, parseFloat(r.workCompletedPercent || "0")))}%` }} 
+                                      />
+                                    </div>
+                                    <span className="font-mono font-bold text-xs text-slate-800">{r.workCompletedPercent || "0"}%</span>
+                                  </div>
+                                </td>
+                                <td className="py-3 px-3.5 font-medium text-slate-700">
+                                  {r.targetDate || "-"}
+                                </td>
+                                <td className="py-3 px-3.5 font-medium text-slate-700">
+                                  {r.workCompletedTodayPercent ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
+                                      +{r.workCompletedTodayPercent}%
+                                    </span>
+                                  ) : "-"}
+                                </td>
+                                <td className="py-3 px-3.5 font-bold text-slate-800 text-center">
+                                  {r.noOfLaborSubcontractor || "-"}
+                                </td>
+                                <td className="py-3 px-3.5 font-medium text-slate-600 uppercase max-w-xs">
+                                  {r.equipment || "-"}
+                                </td>
+                                <td className="py-3 px-3.5 text-slate-700 font-medium max-w-xs">
+                                  {r.remarks || "-"}
+                                </td>
+                                <td className="py-3 px-3.5 text-center">
+                                  {r.images && r.images.length > 0 ? (
+                                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                      {r.images.map((img, imgIdx) => (
+                                        <button
+                                          key={imgIdx}
+                                          type="button"
+                                          onClick={() => setLightbox({
+                                            isOpen: true,
+                                            images: r.images || [],
+                                            activeIndex: imgIdx,
+                                            title: `${r.activityName || "Progress Activity"} Photo`
+                                          })}
+                                          className="relative group border border-slate-200 rounded-lg overflow-hidden hover:ring-2 hover:ring-indigo-500 transition-all cursor-pointer bg-slate-100 shrink-0"
+                                          title="Click to view full image"
+                                        >
+                                          <img src={img} alt={`Upload ${imgIdx + 1}`} className="w-10 h-10 object-cover" />
+                                          <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                            <Eye className="w-3.5 h-3.5 text-white" />
+                                          </div>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 text-2xs italic">No photo</span>
+                                  )}
+                                </td>
+                              </>
+                            )}
                           </tr>
                         ))}
                       </tbody>
+                      {activeFormTab === "monitoring" && (
+                        <tfoot>
+                          <tr className="bg-slate-900 text-white text-xs font-bold border-t-2 border-slate-800">
+                            <td className="py-2.5 px-3.5 text-center font-mono text-slate-400">#</td>
+                            <td className="py-2.5 px-3.5 uppercase font-bold text-amber-300">
+                              TOTAL ACTIVITIES: {dayRecords.length}
+                            </td>
+                            <td className="py-2.5 px-3.5" colSpan={3}></td>
+                            <td className="py-2.5 px-3.5 uppercase font-bold text-amber-300 text-center">
+                              TOTAL LABORS: {dayRecords.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0)}
+                            </td>
+                            <td className="py-2.5 px-3.5" colSpan={3}></td>
+                          </tr>
+                        </tfoot>
+                      )}
                     </table>
                   </div>
                 );
@@ -10930,7 +11217,7 @@ export default function App() {
                   }}
                   className="inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-900 text-xs font-semibold rounded-xl text-white bg-slate-900 hover:bg-slate-800 cursor-pointer transition-all"
                 >
-                  <PlusCircle className="h-3.5 w-3.5" /> Log Another Labor Record
+                  <PlusCircle className="h-3.5 w-3.5" /> {activeFormTab === "attendance" ? "Log Another Labor Record" : "Log Another Progress Record"}
                 </button>
                 <button
                   id="modal-footer-close-btn"

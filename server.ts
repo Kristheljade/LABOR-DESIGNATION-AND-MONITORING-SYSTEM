@@ -317,7 +317,27 @@ async function getSubmissions(): Promise<any[]> {
   return readLocalSubmissions();
 }
 
+let isSyncingSeparateFiles = false;
+let pendingSyncRequest = false;
+
 async function syncSeparateFiles() {
+  if (isSyncingSeparateFiles) {
+    pendingSyncRequest = true;
+    return;
+  }
+  isSyncingSeparateFiles = true;
+
+  try {
+    do {
+      pendingSyncRequest = false;
+      await performSyncSeparateFiles();
+    } while (pendingSyncRequest);
+  } finally {
+    isSyncingSeparateFiles = false;
+  }
+}
+
+async function performSyncSeparateFiles() {
   try {
     const submissions = await getSubmissions();
     const LEDGER_DIR = path.join(process.cwd(), "ledger_records");
@@ -325,20 +345,27 @@ async function syncSeparateFiles() {
     const MONTHLY_DIR = path.join(LEDGER_DIR, "monthly");
 
     // Ensure directories exist
-    if (!existsSync(LEDGER_DIR)) {
-      await fs.mkdir(LEDGER_DIR, { recursive: true });
-    }
-
-    // Clean out folders to prevent stale records
-    if (existsSync(DAILY_DIR)) {
-      await fs.rm(DAILY_DIR, { recursive: true, force: true });
-    }
     await fs.mkdir(DAILY_DIR, { recursive: true });
-
-    if (existsSync(MONTHLY_DIR)) {
-      await fs.rm(MONTHLY_DIR, { recursive: true, force: true });
-    }
     await fs.mkdir(MONTHLY_DIR, { recursive: true });
+
+    // Clean out existing files inside folders without removing the directory paths
+    try {
+      const dailyFiles = await fs.readdir(DAILY_DIR);
+      for (const file of dailyFiles) {
+        if (file.endsWith(".json") || file.endsWith(".tmp")) {
+          await fs.unlink(path.join(DAILY_DIR, file)).catch(() => {});
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const monthlyFiles = await fs.readdir(MONTHLY_DIR);
+      for (const file of monthlyFiles) {
+        if (file.endsWith(".json") || file.endsWith(".tmp")) {
+          await fs.unlink(path.join(MONTHLY_DIR, file)).catch(() => {});
+        }
+      }
+    } catch (_) {}
 
     const dailyGroups: Record<string, any[]> = {};
     const monthlyGroups: Record<string, any[]> = {};
