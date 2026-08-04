@@ -618,8 +618,16 @@ export default function App() {
   const [submitError, setSubmitError] = useState<string>("");
   const [lastSubmittedName, setLastSubmittedName] = useState<string>("");
   const [lastSubmittedDate, setLastSubmittedDate] = useState<string>("");
+  const [lastSubmittedEngineer, setLastSubmittedEngineer] = useState<string>("");
   const [isViewSavedLaborsOpen, setIsViewSavedLaborsOpen] = useState<boolean>(false);
+  const [modalEngineerFilter, setModalEngineerFilter] = useState<string>("ALL");
   const [savedLaborsSearchTerm, setSavedLaborsSearchTerm] = useState<string>("");
+
+  const handleOpenViewSavedLaborsModal = () => {
+    const currentEng = (formData.siteEngineer || portalSelectedEngineer || lastSubmittedEngineer || "").trim().toUpperCase();
+    setModalEngineerFilter(currentEng || "ALL");
+    setIsViewSavedLaborsOpen(true);
+  };
 
   // Admin logs state
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -792,6 +800,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("ALL");
   const [selectedDesignationFilter, setSelectedDesignationFilter] = useState<string>("ALL");
+  const [selectedEngineerFilter, setSelectedEngineerFilter] = useState<string>("ALL");
   const [monitoringSearchTerm, setMonitoringSearchTerm] = useState<string>("");
   const [monitoringProjectFilter, setMonitoringProjectFilter] = useState<string>("ALL");
   const [selectedMonitoringDate, setSelectedMonitoringDate] = useState<string>("");
@@ -916,9 +925,9 @@ export default function App() {
     fetchProjectCodes();
     fetchPullOutMonitoring();
     fetchCustomTasks();
+    fetchLedgerFiles();
 
     const interval = setInterval(() => {
-      fetchSubmissions();
       fetchCustomTasks();
       if (currentView === "pullout" || currentView === "admin") {
         fetchPullOutMonitoring();
@@ -927,6 +936,13 @@ export default function App() {
 
     return () => clearInterval(interval);
   }, [isAuthenticated, currentView]);
+
+  // Load ledger files when admin accesses the ledger tab or changes engineer filter
+  useEffect(() => {
+    if (currentView === "admin" && adminTab === "ledger") {
+      fetchLedgerFiles(selectedEngineerFilter);
+    }
+  }, [currentView, adminTab, selectedEngineerFilter]);
 
   // Clear monitoring report selections when tab, site, or month shifts
   useEffect(() => {
@@ -2010,6 +2026,7 @@ export default function App() {
           setSubmissions(prev => [resData.entry, ...prev.filter(s => s.id !== resData.entry.id)]);
         }
         setLastSubmittedDate(payload.date || formData.date);
+        setLastSubmittedEngineer(payload.siteEngineer || formData.siteEngineer || "");
         setSubmitSuccess(true);
         setLastSubmittedName(activeFormTab === "attendance" ? payload.laborsName : payload.activityName);
         setFormImages([]); // Reset uploaded pictures
@@ -2112,8 +2129,6 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setSubmissions(data);
-        // Also load the separate daily and monthly files
-        fetchLedgerFiles();
       } else {
         setLogsError("Error retrieving database log sheet entries from server.");
       }
@@ -2215,11 +2230,15 @@ export default function App() {
     return matchedKey ? statusMap[matchedKey] : null;
   };
 
-  const fetchLedgerFiles = async () => {
+  const fetchLedgerFiles = async (engineerOverride?: string) => {
     setIsLoadingLedgerFiles(true);
     setLedgerFilesError("");
     try {
-      const res = await fetch("/api/ledger-files");
+      const eng = engineerOverride !== undefined ? engineerOverride : selectedEngineerFilter;
+      const url = eng && eng !== "ALL"
+        ? `/api/ledger-files?engineer=${encodeURIComponent(eng)}`
+        : "/api/ledger-files";
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setLedgerFiles(data);
@@ -2555,7 +2574,8 @@ export default function App() {
   };
 
   // View individual ledger file and populate into view modal/slider state
-  const handleViewLedgerFile = async (type: "daily" | "monthly", filename: string, date: string) => {
+  const handleViewLedgerFile = async (type: "daily" | "monthly", filename: string, date: string, engineerOverride?: string) => {
+    const eng = engineerOverride !== undefined ? engineerOverride : selectedEngineerFilter;
     setActiveViewFile({
       isOpen: true,
       type,
@@ -2568,7 +2588,10 @@ export default function App() {
     });
 
     try {
-      const res = await fetch(`/api/ledger-files/view/${type}/${filename}`);
+      const url = eng && eng !== "ALL"
+        ? `/api/ledger-files/view/${type}/${filename}?engineer=${encodeURIComponent(eng)}`
+        : `/api/ledger-files/view/${type}/${filename}`;
+      const res = await fetch(url);
       if (res.ok) {
         const records = await res.json();
         setActiveViewFile(prev => ({
@@ -2594,15 +2617,20 @@ export default function App() {
   };
 
   // Instantly download ledger file as PDF
-  const handleDownloadFileAsPDF = async (type: "daily" | "monthly", filename: string, date: string) => {
+  const handleDownloadFileAsPDF = async (type: "daily" | "monthly", filename: string, date: string, engineerOverride?: string) => {
     try {
-      const res = await fetch(`/api/ledger-files/view/${type}/${filename}`);
+      const eng = engineerOverride !== undefined ? engineerOverride : selectedEngineerFilter;
+      const url = eng && eng !== "ALL"
+        ? `/api/ledger-files/view/${type}/${filename}?engineer=${encodeURIComponent(eng)}`
+        : `/api/ledger-files/view/${type}/${filename}`;
+      const res = await fetch(url);
       if (res.ok) {
         const records = await res.json();
+        const engSuffix = eng && eng !== "ALL" ? ` (${eng})` : "";
         const formattedTitle = type === "daily" 
-          ? `DAILY LEDGER RECORDS FOR ${date}`
-          : `MONTHLY LEDGER RECORDS FOR ${date}`;
-        const pdfName = filename.replace(".json", ".pdf");
+          ? `DAILY LEDGER RECORDS FOR ${date}${engSuffix}`
+          : `MONTHLY LEDGER RECORDS FOR ${date}${engSuffix}`;
+        const pdfName = filename.replace(".json", `${eng && eng !== "ALL" ? `_${eng.replace(/[^a-zA-Z0-9]/g, "_")}` : ""}.pdf`);
         await exportSpecificRecordsToPDF(records, formattedTitle, pdfName);
         showNotification("Success", `${pdfName} downloaded successfully.`, "success");
       } else {
@@ -2845,7 +2873,36 @@ export default function App() {
 
   // Excel UTF-8 safe CSV Downloader
   const downloadCSV = () => {
-    window.open("/api/export", "_blank");
+    if (selectedEngineerFilter !== "ALL" || selectedProjectFilter !== "ALL" || selectedDesignationFilter !== "ALL" || searchTerm) {
+      const BOM = "\uFEFF";
+      let csvContent = BOM + '"DATE","PROJECT","LABORS NAME","DESIGNATION","PROJECT LOCATION","SITE ENGINEER","REASSIGNED TASK","ATTENDANCE"\n';
+
+      for (const s of filteredSubmissions) {
+        const row = [
+          s.date,
+          s.project,
+          s.laborsName,
+          s.designation,
+          s.projectLocation,
+          s.siteEngineer,
+          s.reassignedTask,
+          s.isPullOut ? "Pull Out" : (s.attendanceStatus || "Present")
+        ].map(val => `"${(val || "").replace(/"/g, '""')}"`).join(",");
+        csvContent += row + "\n";
+      }
+
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      const engSuffix = selectedEngineerFilter !== "ALL" ? `_${selectedEngineerFilter.replace(/[^a-zA-Z0-9]/g, "_")}` : "";
+      link.setAttribute("download", `bin_lahej_labor_ledger${engSuffix}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      window.open("/api/export", "_blank");
+    }
   };
 
   // Modern PDF Downloader of Filtered logs with Document Controller branding Header details
@@ -2907,8 +2964,10 @@ export default function App() {
       
       const filterProjStr = selectedProjectFilter === "ALL" ? "All Projects" : selectedProjectFilter;
       const filterTradeStr = selectedDesignationFilter === "ALL" ? "All Trades" : selectedDesignationFilter;
+      const filterEngStr = selectedEngineerFilter === "ALL" ? "All Engineers" : selectedEngineerFilter;
       doc.text(`Project Filter: ${filterProjStr}`, 135, 62);
       doc.text(`Trade Filter: ${filterTradeStr}`, 135, 67);
+      doc.text(`Engineer Account: ${filterEngStr}`, 135, 72);
 
       doc.text(`Showing ${filteredSubmissions.length} of ${submissions.length} total logged record sheets`, 215, 62);
 
@@ -4070,11 +4129,13 @@ export default function App() {
 
     const matchesProject = selectedProjectFilter === "ALL" || s.project === selectedProjectFilter;
     const matchesDesignation = selectedDesignationFilter === "ALL" || s.designation === selectedDesignationFilter;
+    const matchesEngineer = selectedEngineerFilter === "ALL" || 
+      (s.siteEngineer && s.siteEngineer.trim().toUpperCase() === selectedEngineerFilter.trim().toUpperCase());
 
-    return matchesSearch && matchesProject && matchesDesignation;
+    return matchesSearch && matchesProject && matchesDesignation && matchesEngineer;
   });
 
-  // Extract unique active projects & designations for sidebar filter dropdowns (only for Labor Attendance)
+  // Extract unique active projects, designations & engineers for admin filter dropdowns
   const uniqueProjects = Array.from(new Set(
     submissions
       .filter(s => s.laborsName && s.laborsName.trim() && s.project && s.project.trim())
@@ -4085,6 +4146,12 @@ export default function App() {
       .filter(s => s.laborsName && s.laborsName.trim() && s.designation && s.designation.trim())
       .map(s => s.designation)
   ));
+  const uniqueEngineers = Array.from(new Set([
+    ...COMMON_ENGINEERS,
+    ...submissions
+      .filter(s => s.siteEngineer && s.siteEngineer.trim())
+      .map(s => s.siteEngineer.trim().toUpperCase())
+  ])).filter(Boolean).sort();
 
   // Grouped stats for admin visualization cards (Labor Attendance only)
   const totalLoggedWorkers = submissions.filter(s => s.laborsName && s.laborsName.trim()).length;
@@ -4244,40 +4311,53 @@ export default function App() {
                 </h2>
               </div>
               
-              {/* Form Selection Tabs */}
-              <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl">
+              {/* Form Selection Tabs & Quick Actions */}
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  id="tab-btn-attendance"
+                  id="quick-view-saved-records-btn"
                   type="button"
-                  onClick={() => {
-                    setActiveFormTab("attendance");
-                    setSubmitSuccess(false);
-                    setSubmitError("");
-                  }}
-                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
-                    activeFormTab === "attendance"
-                      ? "bg-slate-900 text-white shadow-sm"
-                      : "text-slate-500 hover:text-slate-800"
-                  }`}
+                  onClick={handleOpenViewSavedLaborsModal}
+                  className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                  title={activeFormTab === "attendance" ? "View All Selected Labors for assigned engineer" : "View All Selected Activities for assigned engineer"}
                 >
-                  Labor Attendance
+                  <Users className="h-3.5 w-3.5 text-indigo-600" />
+                  <span>{activeFormTab === "attendance" ? "View Selected Labors" : "View Selected Activities"}</span>
                 </button>
-                <button
-                  id="tab-btn-monitoring"
-                  type="button"
-                  onClick={() => {
-                    setActiveFormTab("monitoring");
-                    setSubmitSuccess(false);
-                    setSubmitError("");
-                  }}
-                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
-                    activeFormTab === "monitoring"
-                      ? "bg-slate-900 text-white shadow-sm"
-                      : "text-slate-500 hover:text-slate-800"
-                  }`}
-                >
-                  Progress Monitoring
-                </button>
+
+                <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl">
+                  <button
+                    id="tab-btn-attendance"
+                    type="button"
+                    onClick={() => {
+                      setActiveFormTab("attendance");
+                      setSubmitSuccess(false);
+                      setSubmitError("");
+                    }}
+                    className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
+                      activeFormTab === "attendance"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    Labor Attendance
+                  </button>
+                  <button
+                    id="tab-btn-monitoring"
+                    type="button"
+                    onClick={() => {
+                      setActiveFormTab("monitoring");
+                      setSubmitSuccess(false);
+                      setSubmitError("");
+                    }}
+                    className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
+                      activeFormTab === "monitoring"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    Progress Monitoring
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -4312,7 +4392,7 @@ export default function App() {
 
                     <button
                       id="view-saved-labors-btn"
-                      onClick={() => setIsViewSavedLaborsOpen(true)}
+                      onClick={handleOpenViewSavedLaborsModal}
                       className="inline-flex items-center justify-center gap-2 px-5 py-3 border border-slate-300 text-sm font-semibold rounded-xl text-slate-800 bg-white hover:bg-slate-50 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
                     >
                       <Users className="h-4 w-4 text-slate-600" />
@@ -4324,17 +4404,28 @@ export default function App() {
                       onClick={() => {
                         const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
                         const isAttendance = activeFormTab === "attendance";
-                        const dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
+                        const activeEng = (formData.siteEngineer || portalSelectedEngineer || lastSubmittedEngineer || "").trim().toUpperCase();
+
+                        let dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
+                        
+                        if (activeEng && activeEng !== "ALL") {
+                          dayRecords = dayRecords.filter(s => (s.siteEngineer || "").trim().toUpperCase() === activeEng);
+                        }
+
                         if (dayRecords.length === 0) {
-                          showNotification("Warning", `No saved ${isAttendance ? "labor" : "activity"} records found for this date.`, "info");
+                          showNotification("Warning", `No saved ${isAttendance ? "labor" : "activity"} records found${activeEng ? ` for ${activeEng}` : ""} on date ${targetDate}.`, "info");
                           return;
                         }
+
+                        const titleEng = activeEng && activeEng !== "ALL" ? ` - ${activeEng}` : "";
+                        const fileEng = activeEng && activeEng !== "ALL" ? `_${activeEng.replace(/[^a-zA-Z0-9]/g, "_")}` : "";
+
                         exportSpecificRecordsToPDF(
                           dayRecords,
-                          isAttendance ? `DAILY LABOR ATTENDANCE REPORT (${targetDate})` : `DAILY PROGRESS MONITORING REPORT (${targetDate})`,
-                          isAttendance ? `Daily_Labor_Attendance_${targetDate}.pdf` : `Daily_Progress_Monitoring_${targetDate}.pdf`
+                          isAttendance ? `DAILY LABOR ATTENDANCE REPORT${titleEng} (${targetDate})` : `DAILY PROGRESS MONITORING REPORT${titleEng} (${targetDate})`,
+                          isAttendance ? `Daily_Labor_Attendance${fileEng}_${targetDate}.pdf` : `Daily_Progress_Monitoring${fileEng}_${targetDate}.pdf`
                         );
-                        showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records.`, "success");
+                        showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records${activeEng ? ` (${activeEng})` : ""}.`, "success");
                       }}
                       className="inline-flex items-center justify-center gap-2 px-5 py-3 border border-rose-200 text-sm font-semibold rounded-xl text-rose-700 bg-rose-50/80 hover:bg-rose-100 shadow-sm focus:outline-none cursor-pointer transition-all duration-200"
                     >
@@ -6945,11 +7036,15 @@ export default function App() {
                   
                   <button
                     id="refresh-logs-btn"
-                    onClick={fetchSubmissions}
-                    disabled={isLoadingLogs}
+                    onClick={() => {
+                      fetchSubmissions();
+                      fetchLedgerFiles();
+                    }}
+                    disabled={isLoadingLogs || isLoadingLedgerFiles}
                     className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                    title="Manual Refresh Database Logs & Files"
                   >
-                    <RefreshCw className={`h-4 w-4 ${isLoadingLogs ? "animate-spin" : ""}`} />
+                    <RefreshCw className={`h-4 w-4 ${isLoadingLogs || isLoadingLedgerFiles ? "animate-spin" : ""}`} />
                   </button>
 
                   <button
@@ -7023,8 +7118,17 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <Calendar className="h-5 w-5 text-rose-500" />
                         <div>
-                          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Daily Ledger Records</h3>
-                          <p className="text-[10px] text-slate-400 font-mono">Individual files per day (CSV & PDF)</p>
+                          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
+                            Daily Ledger Records
+                            {selectedEngineerFilter !== "ALL" && (
+                              <span className="text-[10px] font-semibold bg-rose-50 text-rose-700 px-2 py-0.5 rounded-md border border-rose-200">
+                                {selectedEngineerFilter}
+                              </span>
+                            )}
+                          </h3>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {selectedEngineerFilter !== "ALL" ? `Daily files filtered for ${selectedEngineerFilter}` : "Individual files per day (CSV & PDF)"}
+                          </p>
                         </div>
                       </div>
                       <span className="text-[10px] font-mono font-bold bg-rose-50 text-rose-600 px-2.5 py-0.5 rounded-full border border-rose-100 uppercase">
@@ -7047,7 +7151,12 @@ export default function App() {
                         {ledgerFiles.daily.map((file) => {
                           const formattedDate = (() => {
                             try {
-                              const d = new Date(file.date);
+                              const match = (file.date || "").match(/\d{4}-\d{2}-\d{2}/) || (file.filename || "").match(/\d{4}-\d{2}-\d{2}/);
+                              const cleanDate = match ? match[0] : file.date;
+                              const [year, month, day] = cleanDate.split("-").map(Number);
+                              if (!year || !month || !day) return file.date;
+                              const d = new Date(year, month - 1, day);
+                              if (isNaN(d.getTime())) return file.date;
                               return d.toLocaleDateString('en-US', { 
                                 weekday: 'short',
                                 year: 'numeric', 
@@ -7058,6 +7167,8 @@ export default function App() {
                               return file.date;
                             }
                           })();
+
+                          const csvUrl = `${file.path}?format=csv${selectedEngineerFilter !== "ALL" ? `&engineer=${encodeURIComponent(selectedEngineerFilter)}` : ""}`;
 
                           return (
                             <div key={file.filename} className="p-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-100 hover:border-slate-200/85 rounded-2xl transition-all flex flex-col xl:flex-row xl:items-center justify-between gap-3">
@@ -7072,6 +7183,11 @@ export default function App() {
                                   <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100 font-mono">
                                     {file.recordCount} {file.recordCount === 1 ? 'record' : 'records'}
                                   </span>
+                                  {selectedEngineerFilter !== "ALL" && (
+                                    <span className="text-[9px] font-mono font-semibold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">
+                                      {selectedEngineerFilter}
+                                    </span>
+                                  )}
                                   <span className="text-[9px] font-mono text-slate-400">
                                     {(file.size / 1024).toFixed(2)} KB
                                   </span>
@@ -7079,21 +7195,21 @@ export default function App() {
                               </div>
                               <div className="flex flex-wrap gap-1.5 shrink-0 items-center">
                                 <button
-                                  onClick={() => handleViewLedgerFile("daily", file.filename, file.date)}
+                                  onClick={() => handleViewLedgerFile("daily", file.filename, file.date, selectedEngineerFilter)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 hover:border-indigo-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
                                   title="View records of this day directly in screen"
                                 >
                                   <Eye className="h-3 w-3 text-indigo-600" /> View
                                 </button>
                                 <button
-                                  onClick={() => handleDownloadFileAsPDF("daily", file.filename, file.date)}
+                                  onClick={() => handleDownloadFileAsPDF("daily", file.filename, file.date, selectedEngineerFilter)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 hover:border-rose-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
                                   title="Export this day as a clean PDF document"
                                 >
                                   <FileText className="h-3 w-3 text-rose-600" /> PDF
                                 </button>
                                 <a
-                                  href={`${file.path}?format=csv`}
+                                  href={csvUrl}
                                   download
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 hover:border-emerald-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
                                   title="Download as CSV file for Microsoft Excel"
@@ -7121,8 +7237,17 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <FileText className="h-5 w-5 text-indigo-500" />
                         <div>
-                          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Monthly Ledger Records</h3>
-                          <p className="text-[10px] text-slate-400 font-mono">Roll-up files per month (CSV & PDF)</p>
+                          <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
+                            Monthly Ledger Records
+                            {selectedEngineerFilter !== "ALL" && (
+                              <span className="text-[10px] font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md border border-indigo-200">
+                                {selectedEngineerFilter}
+                              </span>
+                            )}
+                          </h3>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {selectedEngineerFilter !== "ALL" ? `Monthly roll-up files filtered for ${selectedEngineerFilter}` : "Roll-up files per month (CSV & PDF)"}
+                          </p>
                         </div>
                       </div>
                       <span className="text-[10px] font-mono font-bold bg-indigo-50 text-indigo-600 px-2.5 py-0.5 rounded-full border border-indigo-100 uppercase">
@@ -7145,8 +7270,12 @@ export default function App() {
                         {ledgerFiles.monthly.map((file) => {
                           const formattedMonth = (() => {
                             try {
-                              const [year, month] = file.date.split("-");
-                              const d = new Date(parseInt(year), parseInt(month) - 1, 1);
+                              const match = (file.date || "").match(/\d{4}-\d{2}/) || (file.filename || "").match(/\d{4}-\d{2}/);
+                              const cleanMonth = match ? match[0] : file.date;
+                              const [year, month] = cleanMonth.split("-").map(Number);
+                              if (!year || !month) return file.date;
+                              const d = new Date(year, month - 1, 1);
+                              if (isNaN(d.getTime())) return file.date;
                               return d.toLocaleDateString('en-US', { 
                                 year: 'numeric', 
                                 month: 'long' 
@@ -7155,6 +7284,8 @@ export default function App() {
                               return file.date;
                             }
                           })();
+
+                          const csvUrl = `${file.path}?format=csv${selectedEngineerFilter !== "ALL" ? `&engineer=${encodeURIComponent(selectedEngineerFilter)}` : ""}`;
 
                           return (
                             <div key={file.filename} className="p-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-100 hover:border-slate-200/85 rounded-2xl transition-all flex flex-col xl:flex-row xl:items-center justify-between gap-3">
@@ -7169,6 +7300,11 @@ export default function App() {
                                   <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-100 font-mono">
                                     {file.recordCount} {file.recordCount === 1 ? 'record' : 'records'}
                                   </span>
+                                  {selectedEngineerFilter !== "ALL" && (
+                                    <span className="text-[9px] font-mono font-semibold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
+                                      {selectedEngineerFilter}
+                                    </span>
+                                  )}
                                   <span className="text-[9px] font-mono text-slate-400">
                                     {(file.size / 1024).toFixed(2)} KB
                                   </span>
@@ -7176,21 +7312,21 @@ export default function App() {
                               </div>
                               <div className="flex flex-wrap gap-1.5 shrink-0 items-center">
                                 <button
-                                  onClick={() => handleViewLedgerFile("monthly", file.filename, file.date)}
+                                  onClick={() => handleViewLedgerFile("monthly", file.filename, file.date, selectedEngineerFilter)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 hover:border-indigo-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
                                   title="View records of this month directly in screen"
                                 >
                                   <Eye className="h-3 w-3 text-indigo-600" /> View
                                 </button>
                                 <button
-                                  onClick={() => handleDownloadFileAsPDF("monthly", file.filename, file.date)}
+                                  onClick={() => handleDownloadFileAsPDF("monthly", file.filename, file.date, selectedEngineerFilter)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 hover:border-rose-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
                                   title="Export this month as a clean PDF document"
                                 >
                                   <FileText className="h-3 w-3 text-rose-600" /> PDF
                                 </button>
                                 <a
-                                  href={`${file.path}?format=csv`}
+                                  href={csvUrl}
                                   download
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 hover:border-emerald-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
                                   title="Download as CSV file for Microsoft Excel"
@@ -7213,6 +7349,79 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Engineer Account Separation & Categorization Panel */}
+                <div id="engineer-account-categories" className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="h-4.5 w-4.5 text-indigo-600" />
+                      <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-display">
+                        Site Engineer Categorized Accounts
+                      </h3>
+                      <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold border border-indigo-100 font-mono">
+                        {uniqueEngineers.length} ENGINEERS IDENTIFIED
+                      </span>
+                    </div>
+                    {selectedEngineerFilter !== "ALL" && (
+                      <button
+                        onClick={() => setSelectedEngineerFilter("ALL")}
+                        className="text-2xs font-bold uppercase text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-3 py-1 rounded-lg transition-colors cursor-pointer border border-rose-200/80 flex items-center gap-1.5"
+                      >
+                        <X className="h-3.5 w-3.5" /> Reset View to All Engineers
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Engineer Selection Tabs */}
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      id="engineer-tab-all"
+                      onClick={() => setSelectedEngineerFilter("ALL")}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer flex items-center gap-2 ${
+                        selectedEngineerFilter === "ALL"
+                          ? "bg-slate-900 text-white shadow-xs ring-2 ring-slate-900/10"
+                          : "bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200/80"
+                      }`}
+                    >
+                      <span>All Engineers</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                        selectedEngineerFilter === "ALL" ? "bg-slate-800 text-slate-200" : "bg-slate-200 text-slate-700"
+                      }`}>
+                        {submissions.filter(s => s.laborsName && s.laborsName.trim()).length}
+                      </span>
+                    </button>
+
+                    {uniqueEngineers.map(eng => {
+                      const engRecordCount = submissions.filter(s => 
+                        s.laborsName && s.laborsName.trim() && 
+                        s.siteEngineer && s.siteEngineer.trim().toUpperCase() === eng.toUpperCase()
+                      ).length;
+
+                      const isSelected = selectedEngineerFilter.toUpperCase() === eng.toUpperCase();
+
+                      return (
+                        <button
+                          key={eng}
+                          id={`engineer-tab-${eng.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase()}`}
+                          onClick={() => setSelectedEngineerFilter(eng)}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer flex items-center gap-2 ${
+                            isSelected
+                              ? "bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-600/20"
+                              : "bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80"
+                          }`}
+                        >
+                          <User className="h-3.5 w-3.5 opacity-80" />
+                          <span>{eng}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                            isSelected ? "bg-indigo-700 text-indigo-100" : "bg-slate-200 text-slate-700"
+                          }`}>
+                            {engRecordCount}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 {/* Database Search & Filters Control Panel */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
                   
@@ -7231,6 +7440,21 @@ export default function App() {
 
                   {/* Interactive Option Filters */}
                   <div className="flex flex-wrap gap-3 w-full md:w-auto">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xs font-semibold text-slate-400 uppercase tracking-widest">Engineer:</span>
+                      <select
+                        id="filter-engineer"
+                        value={selectedEngineerFilter}
+                        onChange={(e) => setSelectedEngineerFilter(e.target.value)}
+                        className="text-xs border border-slate-200 rounded-xl py-2 px-3 bg-indigo-50/60 hover:bg-indigo-50 border-indigo-200 transition-colors focus:ring-2 focus:ring-indigo-900/10 focus:border-indigo-700 outline-none font-bold text-indigo-800 uppercase"
+                      >
+                        <option value="ALL">All Engineers</option>
+                        {uniqueEngineers.map(eng => (
+                          <option key={eng} value={eng}>{eng}</option>
+                        ))}
+                      </select>
+                    </div>
+
                     <div className="flex items-center gap-2">
                       <span className="text-2xs font-semibold text-slate-400 uppercase tracking-widest">Project:</span>
                       <select
@@ -7275,6 +7499,23 @@ export default function App() {
                       {filteredSubmissions.length} OF {submissions.length} SHOWN
                     </span>
                   </div>
+
+                  {selectedEngineerFilter !== "ALL" && (
+                    <div className="bg-indigo-50/90 border-b border-indigo-100 px-6 py-2.5 flex items-center justify-between text-xs font-semibold text-indigo-950">
+                      <div className="flex items-center gap-2">
+                        <UserCheck className="h-4 w-4 text-indigo-600 shrink-0" />
+                        <span>
+                          ENGINEER ACCOUNT ISOLATION: Displaying records exclusively submitted by <strong className="font-bold uppercase underline tracking-wide text-indigo-900">{selectedEngineerFilter}</strong>.
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setSelectedEngineerFilter("ALL")}
+                        className="text-2xs font-extrabold uppercase bg-white hover:bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer shadow-2xs shrink-0"
+                      >
+                        Show All Engineers
+                      </button>
+                    </div>
+                  )}
 
                   {logsError && (
                     <div className="p-4 bg-rose-50 text-rose-700 text-xs border-b border-rose-100 flex items-center gap-2">
@@ -7450,7 +7691,10 @@ export default function App() {
                 // Always require at least one monitoring detail to be filled
                 const hasMonitoringData = !!(s.activityName || s.workCompletedPercent || s.targetDate || s.workCompletedTodayPercent || s.noOfLaborSubcontractor || s.equipment);
 
-                return matchesProject && matchesSearch && hasMonitoringData;
+                const matchesEngineer = selectedEngineerFilter === "ALL" ||
+                  (s.siteEngineer && s.siteEngineer.trim().toUpperCase() === selectedEngineerFilter.trim().toUpperCase());
+
+                return matchesProject && matchesSearch && matchesEngineer && hasMonitoringData;
               });
 
               // Calculate beautiful metrics for monitoring:
@@ -7603,6 +7847,20 @@ export default function App() {
                           Clear
                         </button>
                       )}
+                    </div>
+
+                    <div className="w-full sm:w-64 flex flex-col">
+                      <select
+                        id="monitoring-engineer-filter"
+                        value={selectedEngineerFilter}
+                        onChange={(e) => setSelectedEngineerFilter(e.target.value)}
+                        className="w-full px-3 py-2.5 bg-indigo-50/60 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-800 focus:bg-white focus:outline-none transition-all uppercase"
+                      >
+                        <option value="ALL">Filter By Engineer (ALL)</option>
+                        {uniqueEngineers.map((eng) => (
+                          <option key={eng} value={eng}>{eng}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="w-full sm:w-64 flex flex-col">
@@ -10985,324 +11243,305 @@ export default function App() {
       {isViewSavedLaborsOpen && (
         <div id="view-saved-labors-modal" className="fixed inset-0 z-55 flex items-center justify-center p-4 sm:p-6 md:p-10 bg-slate-900/75 backdrop-blur-md animate-fade-in">
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-6xl w-full h-[90vh] md:h-[85vh] flex flex-col overflow-hidden transform scale-100 transition-all animate-slide-in">
-            
-            {/* Modal Header */}
-            <div className="bg-[#0F172A] p-5 md:p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 border-b border-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                  <Users className="h-6 w-6" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2">
-                    {activeFormTab === "attendance" ? "Saved Labor Records for Today" : "Saved Progress Activity Records for Today"}
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">
-                      {lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0]}
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-400 font-mono mt-0.5">
-                    {activeFormTab === "attendance" ? "Review submitted labor details for current day before returning to database" : "Review submitted progress activity details for current day before returning to database"}
-                  </p>
-                </div>
-              </div>
-
-              {/* Action Buttons in Modal Header */}
-              <div className="flex items-center gap-2">
-                <button
-                  id="modal-export-pdf-btn"
-                  onClick={() => {
-                    const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                    const isAttendance = activeFormTab === "attendance";
-                    const dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
-                    if (dayRecords.length === 0) {
-                      showNotification("Warning", `No saved ${isAttendance ? "labor" : "activity"} records found for this date.`, "info");
-                      return;
-                    }
-                    exportSpecificRecordsToPDF(
-                      dayRecords,
-                      isAttendance ? `DAILY LABOR ATTENDANCE REPORT (${targetDate})` : `DAILY PROGRESS MONITORING REPORT (${targetDate})`,
-                      isAttendance ? `Daily_Labor_Attendance_${targetDate}.pdf` : `Daily_Progress_Monitoring_${targetDate}.pdf`
-                    );
-                    showNotification("Exporting PDF", `PDF generated for ${dayRecords.length} records.`, "success");
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors shadow-sm"
-                >
-                  <FileText className="h-3.5 w-3.5" /> Export PDF
-                </button>
-                <button
-                  id="modal-close-btn"
-                  onClick={() => setIsViewSavedLaborsOpen(false)}
-                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Toolbar */}
-            <div className="bg-slate-50 p-4 border-b border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
-              <div className="relative w-full sm:w-80">
-                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  id="search-saved-labors-input"
-                  type="text"
-                  placeholder={activeFormTab === "attendance" ? "Filter by worker name, trade, task..." : "Filter by activity name, trade, project..."}
-                  value={savedLaborsSearchTerm}
-                  onChange={(e) => setSavedLaborsSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-700"
-                />
-              </div>
+            {(() => {
+              const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
+              const isAttendance = activeFormTab === "attendance";
               
-              <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                <span className="bg-white px-3 py-1 rounded-lg border border-slate-200 text-slate-700 font-mono text-2xs font-bold">
-                  {
-                    submissions.filter(s => {
-                      const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                      const isAttendance = activeFormTab === "attendance";
-                      return s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName));
-                    }).length
-                  } Total Saved {activeFormTab === "attendance" ? "Labor" : "Activity"} Records
-                </span>
-              </div>
-            </div>
+              // Find all unique engineers who have records for this date & tab
+              const dateRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
+              const uniqueEngineers = Array.from(new Set(dateRecords.map(s => (s.siteEngineer || "").trim().toUpperCase()).filter(Boolean)));
 
-            {/* Modal Content / Table */}
-            <div className="flex-1 overflow-auto p-4 md:p-6">
-              {(() => {
-                const targetDate = lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0];
-                const isAttendance = activeFormTab === "attendance";
-                let dayRecords = submissions.filter(s => s.date === targetDate && (isAttendance ? Boolean(s.laborsName) : Boolean(s.activityName)));
+              // Active filter for modal
+              const activeEngFilter = modalEngineerFilter.trim().toUpperCase();
 
-                if (savedLaborsSearchTerm.trim()) {
-                  const q = savedLaborsSearchTerm.toLowerCase();
-                  dayRecords = dayRecords.filter(r => 
-                    (r.laborsName && r.laborsName.toLowerCase().includes(q)) ||
-                    (r.activityName && r.activityName.toLowerCase().includes(q)) ||
-                    (r.designation && r.designation.toLowerCase().includes(q)) ||
-                    (r.noOfLaborSubcontractor && r.noOfLaborSubcontractor.toLowerCase().includes(q)) ||
-                    (r.reassignedTask && r.reassignedTask.toLowerCase().includes(q)) ||
-                    (r.siteEngineer && r.siteEngineer.toLowerCase().includes(q)) ||
-                    (r.project && r.project.toLowerCase().includes(q))
-                  );
-                }
+              // Filter records by engineer
+              let dayRecords = dateRecords;
+              if (activeEngFilter && activeEngFilter !== "ALL") {
+                dayRecords = dayRecords.filter(s => (s.siteEngineer || "").trim().toUpperCase() === activeEngFilter);
+              }
 
-                if (dayRecords.length === 0) {
-                  return (
-                    <div className="py-16 text-center flex flex-col items-center justify-center">
-                      <div className="bg-slate-100 p-4 rounded-full text-slate-400 mb-3">
-                        <Users className="h-10 w-10" />
-                      </div>
-                      <h4 className="text-base font-bold text-slate-700">
-                        {activeFormTab === "attendance" ? "No Labor Records Found" : "No Activity Records Found"}
-                      </h4>
-                      <p className="text-slate-500 text-xs mt-1 max-w-sm">
-                        {savedLaborsSearchTerm ? "No entries match your search query." : (activeFormTab === "attendance" ? `No saved labor entries logged for date ${targetDate}.` : `No saved activity entries logged for date ${targetDate}.`)}
-                      </p>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="overflow-x-auto rounded-2xl border border-slate-200/80 shadow-sm">
-                    <table className="w-full text-left border-collapse bg-white">
-                      <thead>
-                        <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
-                          <th className="py-3 px-3.5 text-center w-12 border-b border-slate-800">S/NO.</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Labor's Name" : "Name of Activity"}</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Trade / Designation" : "% Work Completed (Cumulative)"}</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Project / Location" : "Target Date"}</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Site Engineer" : "Work Completed Today"}</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Reassigned Task" : "No. Labor / Subcontractor"}</th>
-                          <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Attendance Status & Details" : "Equipment"}</th>
-                          {activeFormTab === "monitoring" && (
-                            <>
-                              <th className="py-3 px-3.5 border-b border-slate-800">Remarks</th>
-                              <th className="py-3 px-3.5 border-b border-slate-800 text-center min-w-[120px]">Pictures</th>
-                            </>
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
-                        {dayRecords.map((r, idx) => (
-                          <tr key={r.id || idx} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="py-3 px-3.5 text-center font-mono font-bold text-slate-400 border-r border-slate-100">
-                              {idx + 1}
-                            </td>
-                            <td className="py-3 px-3.5 font-bold text-slate-900 uppercase">
-                              {r.laborsName || r.activityName || "-"}
-                            </td>
-                            
-                            {activeFormTab === "attendance" ? (
-                              <>
-                                <td className="py-3 px-3.5 font-medium text-slate-600 uppercase">
-                                  {r.designation || "-"}
-                                </td>
-                                <td className="py-3 px-3.5 font-medium text-slate-700 uppercase">
-                                  <span className="font-bold text-slate-900">{r.project || "-"}</span>
-                                  {r.projectLocation ? <span className="text-slate-400 text-2xs block">{r.projectLocation}</span> : null}
-                                </td>
-                                <td className="py-3 px-3.5 text-slate-600 uppercase">
-                                  {r.siteEngineer || "-"}
-                                </td>
-                                <td className="py-3 px-3.5 text-slate-800 font-medium uppercase max-w-xs">
-                                  {r.reassignedTask || r.remarks || "-"}
-                                </td>
-                                <td className="py-3 px-3.5">
-                                  {r.isPullOut ? (
-                                    <div className="space-y-0.5">
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-amber-100 text-amber-900 border border-amber-200">
-                                        PULL OUT → {r.pullOutSite || "N/A"}
-                                      </span>
-                                      {r.pullOutTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.pullOutTime}</div>}
-                                      {r.pullOutReason && <div className="text-2xs text-slate-500 italic">Reason: {r.pullOutReason}</div>}
-                                    </div>
-                                  ) : r.attendanceStatus === "Absent" ? (
-                                    <div className="space-y-0.5">
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                                        ABSENT
-                                      </span>
-                                      {(r.absentReason || r.absentReasonOther) && (
-                                        <div className="text-2xs text-slate-500">
-                                          Reason: {r.absentReason === "Others" ? r.absentReasonOther : r.absentReason}
-                                        </div>
-                                      )}
-                                    </div>
-                                  ) : r.attendanceStatus === "Under Time" ? (
-                                    <div className="space-y-0.5">
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                        UNDER TIME
-                                      </span>
-                                      {r.underTimeTime && <div className="text-2xs text-slate-500 font-mono">Time: {r.underTimeTime}</div>}
-                                      {(r.underTimeReason || r.underTimeReasonOther) && (
-                                        <div className="text-2xs text-slate-500">
-                                          Reason: {r.underTimeReason === "Others" ? r.underTimeReasonOther : r.underTimeReason}
-                                        </div>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                      PRESENT
-                                    </span>
-                                  )}
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="py-3 px-3.5 font-medium text-slate-700">
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-16 h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200 shrink-0">
-                                      <div 
-                                        className={`h-full rounded-full ${
-                                          parseFloat(r.workCompletedPercent || "0") >= 100 
-                                            ? "bg-emerald-500" 
-                                            : parseFloat(r.workCompletedPercent || "0") > 50 
-                                            ? "bg-amber-500" 
-                                            : "bg-blue-500"
-                                        }`} 
-                                        style={{ width: `${Math.min(100, Math.max(0, parseFloat(r.workCompletedPercent || "0")))}%` }} 
-                                      />
-                                    </div>
-                                    <span className="font-mono font-bold text-xs text-slate-800">{r.workCompletedPercent || "0"}%</span>
-                                  </div>
-                                </td>
-                                <td className="py-3 px-3.5 font-medium text-slate-700">
-                                  {r.targetDate || "-"}
-                                </td>
-                                <td className="py-3 px-3.5 font-medium text-slate-700">
-                                  {r.workCompletedTodayPercent ? (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
-                                      +{r.workCompletedTodayPercent}%
-                                    </span>
-                                  ) : "-"}
-                                </td>
-                                <td className="py-3 px-3.5 font-bold text-slate-800 text-center">
-                                  {r.noOfLaborSubcontractor || "-"}
-                                </td>
-                                <td className="py-3 px-3.5 font-medium text-slate-600 uppercase max-w-xs">
-                                  {r.equipment || "-"}
-                                </td>
-                                <td className="py-3 px-3.5 text-slate-700 font-medium max-w-xs">
-                                  {r.remarks || "-"}
-                                </td>
-                                <td className="py-3 px-3.5 text-center">
-                                  {r.images && r.images.length > 0 ? (
-                                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                                      {r.images.map((img, imgIdx) => (
-                                        <button
-                                          key={imgIdx}
-                                          type="button"
-                                          onClick={() => setLightbox({
-                                            isOpen: true,
-                                            images: r.images || [],
-                                            activeIndex: imgIdx,
-                                            title: `${r.activityName || "Progress Activity"} Photo`
-                                          })}
-                                          className="relative group border border-slate-200 rounded-lg overflow-hidden hover:ring-2 hover:ring-indigo-500 transition-all cursor-pointer bg-slate-100 shrink-0"
-                                          title="Click to view full image"
-                                        >
-                                          <img src={img} alt={`Upload ${imgIdx + 1}`} className="w-10 h-10 object-cover" />
-                                          <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                            <Eye className="w-3.5 h-3.5 text-white" />
-                                          </div>
-                                        </button>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span className="text-slate-400 text-2xs italic">No photo</span>
-                                  )}
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                      {activeFormTab === "monitoring" && (
-                        <tfoot>
-                          <tr className="bg-slate-900 text-white text-xs font-bold border-t-2 border-slate-800">
-                            <td className="py-2.5 px-3.5 text-center font-mono text-slate-400">#</td>
-                            <td className="py-2.5 px-3.5 uppercase font-bold text-amber-300">
-                              TOTAL ACTIVITIES: {dayRecords.length}
-                            </td>
-                            <td className="py-2.5 px-3.5" colSpan={3}></td>
-                            <td className="py-2.5 px-3.5 uppercase font-bold text-amber-300 text-center">
-                              TOTAL LABORS: {dayRecords.reduce((acc, curr) => acc + parseInt(curr.noOfLaborSubcontractor || "0", 10), 0)}
-                            </td>
-                            <td className="py-2.5 px-3.5" colSpan={3}></td>
-                          </tr>
-                        </tfoot>
-                      )}
-                    </table>
-                  </div>
+              // Apply search query filter
+              let filteredDayRecords = dayRecords;
+              if (savedLaborsSearchTerm.trim()) {
+                const q = savedLaborsSearchTerm.toLowerCase();
+                filteredDayRecords = filteredDayRecords.filter(r => 
+                  (r.laborsName && r.laborsName.toLowerCase().includes(q)) ||
+                  (r.activityName && r.activityName.toLowerCase().includes(q)) ||
+                  (r.designation && r.designation.toLowerCase().includes(q)) ||
+                  (r.noOfLaborSubcontractor && r.noOfLaborSubcontractor.toLowerCase().includes(q)) ||
+                  (r.reassignedTask && r.reassignedTask.toLowerCase().includes(q)) ||
+                  (r.siteEngineer && r.siteEngineer.toLowerCase().includes(q)) ||
+                  (r.project && r.project.toLowerCase().includes(q))
                 );
-              })()}
-            </div>
+              }
 
-            {/* Modal Footer */}
-            <div className="bg-slate-50 p-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
-              <p className="text-xs text-slate-500 font-medium">
-                Reviewing records for date <strong className="text-slate-900 font-mono">{lastSubmittedDate || formData.date || new Date().toISOString().split("T")[0]}</strong>
-              </p>
-              
-              <div className="flex items-center gap-2">
-                <button
-                  id="modal-log-another-btn"
-                  onClick={() => {
-                    setIsViewSavedLaborsOpen(false);
-                    setSubmitSuccess(false);
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-900 text-xs font-semibold rounded-xl text-white bg-slate-900 hover:bg-slate-800 cursor-pointer transition-all"
-                >
-                  <PlusCircle className="h-3.5 w-3.5" /> {activeFormTab === "attendance" ? "Log Another Labor Record" : "Log Another Progress Record"}
-                </button>
-                <button
-                  id="modal-footer-close-btn"
-                  onClick={() => setIsViewSavedLaborsOpen(false)}
-                  className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold rounded-xl text-slate-600 bg-white hover:bg-slate-100 cursor-pointer transition-all"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
+              return (
+                <>
+                  {/* Modal Header */}
+                  <div className="bg-[#0F172A] p-5 md:p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 border-b border-slate-800">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                        <Users className="h-6 w-6" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold uppercase tracking-tight flex items-center gap-2 flex-wrap">
+                          {activeFormTab === "attendance" ? "Saved Labor Records for Today" : "Saved Progress Activity Records for Today"}
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800">
+                            {targetDate}
+                          </span>
+                          {activeEngFilter && activeEngFilter !== "ALL" && (
+                            <span className="text-[10px] font-bold font-mono px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-800 uppercase">
+                              {activeEngFilter}
+                            </span>
+                          )}
+                        </h3>
+                        <p className="text-xs text-slate-400 font-mono mt-0.5">
+                          {activeFormTab === "attendance" 
+                            ? `Review submitted labor details for current day${activeEngFilter && activeEngFilter !== "ALL" ? ` (${activeEngFilter})` : ""}` 
+                            : `Review submitted progress activity details for current day${activeEngFilter && activeEngFilter !== "ALL" ? ` (${activeEngFilter})` : ""}`}
+                        </p>
+                      </div>
+                    </div>
 
+                    {/* Action Buttons in Modal Header */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        id="modal-export-pdf-btn"
+                        onClick={() => {
+                          if (filteredDayRecords.length === 0) {
+                            showNotification("Warning", `No saved ${isAttendance ? "labor" : "activity"} records found${activeEngFilter && activeEngFilter !== "ALL" ? ` for ${activeEngFilter}` : ""} on date ${targetDate}.`, "info");
+                            return;
+                          }
+                          const titleEng = activeEngFilter && activeEngFilter !== "ALL" ? ` - ${activeEngFilter}` : "";
+                          const fileEng = activeEngFilter && activeEngFilter !== "ALL" ? `_${activeEngFilter.replace(/[^a-zA-Z0-9]/g, "_")}` : "";
+
+                          exportSpecificRecordsToPDF(
+                            filteredDayRecords,
+                            isAttendance ? `DAILY LABOR ATTENDANCE REPORT${titleEng} (${targetDate})` : `DAILY PROGRESS MONITORING REPORT${titleEng} (${targetDate})`,
+                            isAttendance ? `Daily_Labor_Attendance${fileEng}_${targetDate}.pdf` : `Daily_Progress_Monitoring${fileEng}_${targetDate}.pdf`
+                          );
+                          showNotification("Exporting PDF", `PDF generated for ${filteredDayRecords.length} records${activeEngFilter && activeEngFilter !== "ALL" ? ` (${activeEngFilter})` : ""}.`, "success");
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors shadow-sm"
+                      >
+                        <FileText className="h-3.5 w-3.5" /> Export PDF
+                      </button>
+                      <button
+                        id="modal-close-btn"
+                        onClick={() => setIsViewSavedLaborsOpen(false)}
+                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                      >
+                        <X className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Modal Toolbar */}
+                  <div className="bg-slate-50 p-4 border-b border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                    <div className="relative w-full sm:w-80">
+                      <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        id="search-saved-labors-input"
+                        type="text"
+                        placeholder={activeFormTab === "attendance" ? "Filter by worker name, trade, task..." : "Filter by activity name, trade, project..."}
+                        value={savedLaborsSearchTerm}
+                        onChange={(e) => setSavedLaborsSearchTerm(e.target.value)}
+                        className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-700"
+                      />
+                    </div>
+                    
+                    <div className="flex flex-wrap items-center gap-2.5 text-xs font-medium text-slate-600">
+                      {/* Engineer Filter Dropdown in Toolbar */}
+                      <div className="flex items-center gap-1.5 bg-white px-3 py-1 rounded-xl border border-slate-200 shadow-2xs">
+                        <UserCheck className="h-3.5 w-3.5 text-indigo-500" />
+                        <span className="text-2xs font-bold text-slate-400 uppercase">Engineer:</span>
+                        <select
+                          id="modal-engineer-filter-select"
+                          value={modalEngineerFilter}
+                          onChange={(e) => setModalEngineerFilter(e.target.value)}
+                          className="text-xs font-bold text-slate-800 bg-transparent focus:outline-none cursor-pointer uppercase"
+                        >
+                          <option value="ALL">All Engineers</option>
+                          {uniqueEngineers.map(eng => (
+                            <option key={eng} value={eng}>{eng}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <span className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 font-mono text-2xs font-bold">
+                        {filteredDayRecords.length} Saved {activeFormTab === "attendance" ? "Labor" : "Activity"} Records
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Modal Content / Table */}
+                  <div className="flex-1 overflow-auto p-4 md:p-6">
+                    {filteredDayRecords.length === 0 ? (
+                      <div className="py-16 text-center flex flex-col items-center justify-center">
+                        <div className="bg-slate-100 p-4 rounded-full text-slate-400 mb-3">
+                          <Users className="h-10 w-10" />
+                        </div>
+                        <h4 className="text-base font-bold text-slate-700">
+                          {activeFormTab === "attendance" ? "No Labor Records Found" : "No Activity Records Found"}
+                        </h4>
+                        <p className="text-slate-500 text-xs mt-1 max-w-sm">
+                          {savedLaborsSearchTerm 
+                            ? "No entries match your search query." 
+                            : (activeFormTab === "attendance" 
+                                ? `No saved labor entries logged for date ${targetDate}${activeEngFilter && activeEngFilter !== "ALL" ? ` under ${activeEngFilter}` : ""}.` 
+                                : `No saved activity entries logged for date ${targetDate}${activeEngFilter && activeEngFilter !== "ALL" ? ` under ${activeEngFilter}` : ""}.`)}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto rounded-2xl border border-slate-200/80 shadow-sm">
+                        <table className="w-full text-left border-collapse bg-white">
+                          <thead>
+                            <tr className="bg-slate-900 text-white text-[11px] font-bold uppercase tracking-wider">
+                              <th className="py-3 px-3.5 text-center w-12 border-b border-slate-800">S/NO.</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Labor's Name" : "Name of Activity"}</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Trade / Designation" : "% Work Completed (Cumulative)"}</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Project / Location" : "Target Date"}</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Site Engineer" : "Work Completed Today"}</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Reassigned Task" : "No. Labor / Subcontractor"}</th>
+                              <th className="py-3 px-3.5 border-b border-slate-800">{activeFormTab === "attendance" ? "Attendance Status & Details" : "Equipment"}</th>
+                              {activeFormTab === "monitoring" && (
+                                <>
+                                  <th className="py-3 px-3.5 border-b border-slate-800">Remarks</th>
+                                  <th className="py-3 px-3.5 border-b border-slate-800 text-center min-w-[120px]">Pictures</th>
+                                </>
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
+                            {filteredDayRecords.map((r, idx) => (
+                              <tr key={r.id || idx} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="py-3 px-3.5 text-center font-mono font-bold text-slate-400 border-r border-slate-100">
+                                  {idx + 1}
+                                </td>
+                                <td className="py-3 px-3.5 font-bold text-slate-900 uppercase">
+                                  {r.laborsName || r.activityName || "-"}
+                                </td>
+                                
+                                {activeFormTab === "attendance" ? (
+                                  <>
+                                    <td className="py-3 px-3.5 font-medium text-slate-600 uppercase">
+                                      {r.designation || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 font-medium text-slate-700 uppercase">
+                                      <span className="font-bold text-slate-900">{r.project || "-"}</span>
+                                      {r.projectLocation ? <span className="text-slate-400 text-2xs block">{r.projectLocation}</span> : null}
+                                    </td>
+                                    <td className="py-3 px-3.5 text-slate-600 uppercase">
+                                      {r.siteEngineer || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 font-medium text-slate-700 uppercase">
+                                      {r.reassignedTask || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5">
+                                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-2xs font-bold uppercase tracking-wider ${
+                                        r.attendanceStatus === "Present" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
+                                        r.attendanceStatus === "Absent" ? "bg-rose-50 text-rose-700 border border-rose-200" :
+                                        "bg-amber-50 text-amber-700 border border-amber-200"
+                                      }`}>
+                                        {r.attendanceStatus}
+                                      </span>
+                                      {r.attendanceStatus === "Absent" && (r.absentReason || r.absentReasonOther) ? (
+                                        <span className="text-2xs text-rose-600 block mt-1 font-medium">
+                                          Reason: {r.absentReason === "Others" ? r.absentReasonOther : r.absentReason}
+                                        </span>
+                                      ) : null}
+                                      {r.attendanceStatus === "Under Time" && (r.underTimeTime || r.underTimeReason) ? (
+                                        <span className="text-2xs text-amber-600 block mt-1 font-medium">
+                                          {r.underTimeTime ? `@ ${r.underTimeTime} ` : ""}{r.underTimeReason ? `(${r.underTimeReason === "Others" ? r.underTimeReasonOther : r.underTimeReason})` : ""}
+                                        </span>
+                                      ) : null}
+                                      {r.isPullOut && (
+                                        <span className="inline-block mt-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-[10px] font-bold uppercase">
+                                          Relocated ({r.pullOutSite})
+                                        </span>
+                                      )}
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="py-3 px-3.5 font-bold text-emerald-700">
+                                      {r.workCompletedPercent ? `${r.workCompletedPercent}%` : "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 font-mono text-slate-600">
+                                      {r.targetDate || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 font-bold text-indigo-700">
+                                      {r.workCompletedTodayPercent ? `${r.workCompletedTodayPercent}%` : "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 font-mono font-medium text-slate-700">
+                                      {r.noOfLaborSubcontractor || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 font-medium text-slate-600 uppercase">
+                                      {r.equipment || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 text-slate-600 max-w-xs truncate">
+                                      {r.remarks || "-"}
+                                    </td>
+                                    <td className="py-3 px-3.5 text-center">
+                                      {r.images && r.images.length > 0 ? (
+                                        <div className="flex items-center justify-center gap-1">
+                                          {r.images.map((img, i) => (
+                                            <button
+                                              key={i}
+                                              type="button"
+                                              onClick={() => setLightbox({ isOpen: true, images: r.images || [], activeIndex: i })}
+                                              className="w-7 h-7 rounded border border-slate-200 overflow-hidden hover:scale-105 transition-transform"
+                                            >
+                                              <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                            </button>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <span className="text-slate-300 font-mono text-2xs">None</span>
+                                      )}
+                                    </td>
+                                  </>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="bg-slate-50 p-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                    <p className="text-xs text-slate-500 font-medium flex items-center gap-1.5">
+                      Reviewing records for date <strong className="text-slate-900 font-mono">{targetDate}</strong>
+                      {activeEngFilter && activeEngFilter !== "ALL" && (
+                        <span className="text-slate-400 font-normal">| Engineer: <strong className="text-slate-900 uppercase font-mono">{activeEngFilter}</strong></span>
+                      )}
+                    </p>
+                    
+                    <div className="flex items-center gap-2">
+                      <button
+                        id="modal-log-another-btn"
+                        onClick={() => {
+                          setIsViewSavedLaborsOpen(false);
+                          setSubmitSuccess(false);
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 border border-slate-900 text-xs font-semibold rounded-xl text-white bg-slate-900 hover:bg-slate-800 cursor-pointer transition-all"
+                      >
+                        <PlusCircle className="h-3.5 w-3.5" /> {activeFormTab === "attendance" ? "Log Another Labor Record" : "Log Another Progress Record"}
+                      </button>
+                      <button
+                        id="modal-footer-close-btn"
+                        onClick={() => setIsViewSavedLaborsOpen(false)}
+                        className="inline-flex items-center justify-center px-4 py-2 border border-slate-200 text-xs font-semibold rounded-xl text-slate-600 bg-white hover:bg-slate-100 cursor-pointer transition-all"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

@@ -369,6 +369,8 @@ async function performSyncSeparateFiles() {
 
     const dailyGroups: Record<string, any[]> = {};
     const monthlyGroups: Record<string, any[]> = {};
+    const dailyEngGroups: Record<string, any[]> = {};
+    const monthlyEngGroups: Record<string, any[]> = {};
 
     for (const s of submissions) {
       // Only include submissions with valid laborsName for daily and monthly labor attendance ledger files
@@ -379,12 +381,21 @@ async function performSyncSeparateFiles() {
       const sDate = s.date || "unknown";
       const dayKey = sDate.trim(); // e.g., "2026-06-25"
       const monthKey = sDate.length >= 7 ? sDate.substring(0, 7) : "unknown"; // e.g., "2026-06"
+      const eng = (s.siteEngineer || "UNASSIGNED").trim().toUpperCase();
 
       if (!dailyGroups[dayKey]) dailyGroups[dayKey] = [];
       dailyGroups[dayKey].push(s);
 
+      const engDayKey = `${eng}___${dayKey}`;
+      if (!dailyEngGroups[engDayKey]) dailyEngGroups[engDayKey] = [];
+      dailyEngGroups[engDayKey].push(s);
+
       if (!monthlyGroups[monthKey]) monthlyGroups[monthKey] = [];
       monthlyGroups[monthKey].push(s);
+
+      const engMonthKey = `${eng}___${monthKey}`;
+      if (!monthlyEngGroups[engMonthKey]) monthlyEngGroups[engMonthKey] = [];
+      monthlyEngGroups[engMonthKey].push(s);
     }
 
     for (const [day, list] of Object.entries(dailyGroups)) {
@@ -398,6 +409,25 @@ async function performSyncSeparateFiles() {
       if (month === "unknown") continue;
       list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || (a.laborsName || "").localeCompare(b.laborsName || ""));
       const filePath = path.join(MONTHLY_DIR, `entries_monthly_${month}.json`);
+      await safeWriteFile(filePath, JSON.stringify(list, null, 2));
+    }
+
+    // Write engineer-specific daily & monthly ledger files
+    for (const [engDayKey, list] of Object.entries(dailyEngGroups)) {
+      const [eng, day] = engDayKey.split("___");
+      if (day === "unknown") continue;
+      list.sort((a, b) => (a.laborsName || "").localeCompare(b.laborsName || ""));
+      const engClean = eng.replace(/[^a-zA-Z0-9_\.]/g, "_");
+      const filePath = path.join(DAILY_DIR, `entries_daily_${engClean}_${day}.json`);
+      await safeWriteFile(filePath, JSON.stringify(list, null, 2));
+    }
+
+    for (const [engMonthKey, list] of Object.entries(monthlyEngGroups)) {
+      const [eng, month] = engMonthKey.split("___");
+      if (month === "unknown") continue;
+      list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || (a.laborsName || "").localeCompare(b.laborsName || ""));
+      const engClean = eng.replace(/[^a-zA-Z0-9_\.]/g, "_");
+      const filePath = path.join(MONTHLY_DIR, `entries_monthly_${engClean}_${month}.json`);
       await safeWriteFile(filePath, JSON.stringify(list, null, 2));
     }
 
@@ -1492,59 +1522,134 @@ app.get("/api/ledger-files", requireAdmin, async (req, res) => {
   try {
     await syncSeparateFiles();
 
+    const engineerFilter = (req.query.engineer as string || "").trim().toUpperCase();
+
     const LEDGER_DIR = path.join(process.cwd(), "ledger_records");
     const DAILY_DIR = path.join(LEDGER_DIR, "daily");
     const MONTHLY_DIR = path.join(LEDGER_DIR, "monthly");
 
-    const dailyFilesList: any[] = [];
-    const monthlyFilesList: any[] = [];
+    const dailyMap = new Map<string, any>();
+    const monthlyMap = new Map<string, any>();
 
     if (existsSync(DAILY_DIR)) {
       const files = await fs.readdir(DAILY_DIR);
-      for (const f of files) {
-        if (f.endsWith(".json")) {
+      
+      // If no engineer filter or ALL, strictly look at master files to avoid duplicate engineer split files
+      if (!engineerFilter || engineerFilter === "ALL") {
+        for (const f of files) {
+          if (/^entries_daily_\d{4}-\d{2}-\d{2}\.json$/.test(f)) {
+            const filePath = path.join(DAILY_DIR, f);
+            const stats = await fs.stat(filePath);
+            const content = await fs.readFile(filePath, "utf-8");
+            const records = JSON.parse(content || "[]");
+            const datePart = f.replace("entries_daily_", "").replace(".json", "");
+
+            if (records.length > 0) {
+              dailyMap.set(datePart, {
+                filename: f,
+                type: "daily",
+                date: datePart,
+                size: stats.size,
+                recordCount: records.length,
+                path: `/api/ledger-files/download/daily/${f}`
+              });
+            }
+          }
+        }
+      } else {
+        // Engineer filter specified: check master files and engineer files, prioritizing engineer files but retaining exactly 1 per date
+        for (const f of files) {
+          if (!f.endsWith(".json")) continue;
+          const dailyMatch = f.match(/(\d{4}-\d{2}-\d{2})/);
+          if (!dailyMatch) continue;
+          const datePart = dailyMatch[1];
+
           const filePath = path.join(DAILY_DIR, f);
           const stats = await fs.stat(filePath);
           const content = await fs.readFile(filePath, "utf-8");
-          const records = JSON.parse(content || "[]");
-          const datePart = f.replace("entries_daily_", "").replace(".json", "");
+          let records = JSON.parse(content || "[]");
 
-          dailyFilesList.push({
-            filename: f,
-            type: "daily",
-            date: datePart,
-            size: stats.size,
-            recordCount: records.length,
-            path: `/api/ledger-files/download/daily/${f}`
-          });
+          records = records.filter((s: any) =>
+            s.siteEngineer && s.siteEngineer.trim().toUpperCase() === engineerFilter
+          );
+
+          if (records.length === 0) continue;
+
+          // Prefer engineer specific file over master file if both exist, but ensure strictly 1 entry per datePart
+          const isEngineerFile = f.includes(`entries_daily_`) && !/^entries_daily_\d{4}-\d{2}-\d{2}\.json$/.test(f);
+          if (!dailyMap.has(datePart) || isEngineerFile) {
+            dailyMap.set(datePart, {
+              filename: f,
+              type: "daily",
+              date: datePart,
+              size: stats.size,
+              recordCount: records.length,
+              path: `/api/ledger-files/download/daily/${f}`
+            });
+          }
         }
       }
     }
 
     if (existsSync(MONTHLY_DIR)) {
       const files = await fs.readdir(MONTHLY_DIR);
-      for (const f of files) {
-        if (f.endsWith(".json")) {
+      
+      if (!engineerFilter || engineerFilter === "ALL") {
+        for (const f of files) {
+          if (/^entries_monthly_\d{4}-\d{2}\.json$/.test(f)) {
+            const filePath = path.join(MONTHLY_DIR, f);
+            const stats = await fs.stat(filePath);
+            const content = await fs.readFile(filePath, "utf-8");
+            const records = JSON.parse(content || "[]");
+            const monthPart = f.replace("entries_monthly_", "").replace(".json", "");
+
+            if (records.length > 0) {
+              monthlyMap.set(monthPart, {
+                filename: f,
+                type: "monthly",
+                date: monthPart,
+                size: stats.size,
+                recordCount: records.length,
+                path: `/api/ledger-files/download/monthly/${f}`
+              });
+            }
+          }
+        }
+      } else {
+        for (const f of files) {
+          if (!f.endsWith(".json")) continue;
+          const monthlyMatch = f.match(/(\d{4}-\d{2})/);
+          if (!monthlyMatch) continue;
+          const monthPart = monthlyMatch[1];
+
           const filePath = path.join(MONTHLY_DIR, f);
           const stats = await fs.stat(filePath);
           const content = await fs.readFile(filePath, "utf-8");
-          const records = JSON.parse(content || "[]");
-          const monthPart = f.replace("entries_monthly_", "").replace(".json", "");
+          let records = JSON.parse(content || "[]");
 
-          monthlyFilesList.push({
-            filename: f,
-            type: "monthly",
-            date: monthPart,
-            size: stats.size,
-            recordCount: records.length,
-            path: `/api/ledger-files/download/monthly/${f}`
-          });
+          records = records.filter((s: any) =>
+            s.siteEngineer && s.siteEngineer.trim().toUpperCase() === engineerFilter
+          );
+
+          if (records.length === 0) continue;
+
+          const isEngineerFile = f.includes(`entries_monthly_`) && !/^entries_monthly_\d{4}-\d{2}\.json$/.test(f);
+          if (!monthlyMap.has(monthPart) || isEngineerFile) {
+            monthlyMap.set(monthPart, {
+              filename: f,
+              type: "monthly",
+              date: monthPart,
+              size: stats.size,
+              recordCount: records.length,
+              path: `/api/ledger-files/download/monthly/${f}`
+            });
+          }
         }
       }
     }
 
-    dailyFilesList.sort((a, b) => b.date.localeCompare(a.date));
-    monthlyFilesList.sort((a, b) => b.date.localeCompare(a.date));
+    const dailyFilesList = Array.from(dailyMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+    const monthlyFilesList = Array.from(monthlyMap.values()).sort((a, b) => b.date.localeCompare(a.date));
 
     res.json({
       daily: dailyFilesList,
@@ -1560,6 +1665,7 @@ app.get("/api/ledger-files/download/:type/:filename", requireAdmin, async (req, 
   try {
     const { type, filename } = req.params;
     const format = req.query.format === "csv" ? "csv" : "json";
+    const engineerFilter = (req.query.engineer as string || "").trim().toUpperCase();
 
     if (type !== "daily" && type !== "monthly") {
       return res.status(400).send("Invalid ledger type");
@@ -1572,18 +1678,27 @@ app.get("/api/ledger-files/download/:type/:filename", requireAdmin, async (req, 
       return res.status(404).send("File not found");
     }
 
-    if (format === "json") {
-      res.setHeader("Content-Type", "application/json");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      return res.sendFile(filePath);
-    } else {
-      const content = await fs.readFile(filePath, "utf-8");
-      const records = JSON.parse(content || "[]");
+    const content = await fs.readFile(filePath, "utf-8");
+    let records = JSON.parse(content || "[]");
 
+    if (engineerFilter && engineerFilter !== "ALL") {
+      records = records.filter((s: any) =>
+        s.siteEngineer && s.siteEngineer.trim().toUpperCase() === engineerFilter
+      );
+    }
+
+    if (format === "json") {
+      const jsonFilename = engineerFilter && engineerFilter !== "ALL"
+        ? filename.replace(".json", `_${engineerFilter.replace(/[^a-zA-Z0-9]/g, "_")}.json`)
+        : filename;
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${jsonFilename}"`);
+      return res.send(JSON.stringify(records, null, 2));
+    } else {
       records.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
       const BOM = "\uFEFF";
-      let csvContent = BOM + '"DATE","PROJECT","LABORS NAME","DESIGNATION","PROJECT LOCATION","SITE ENGINEER","REASSIGNED TASK"\n';
+      let csvContent = BOM + '"DATE","PROJECT","LABORS NAME","DESIGNATION","PROJECT LOCATION","SITE ENGINEER","REASSIGNED TASK","ATTENDANCE"\n';
 
       for (const s of records) {
         const row = [
@@ -1593,7 +1708,8 @@ app.get("/api/ledger-files/download/:type/:filename", requireAdmin, async (req, 
           s.designation,
           s.projectLocation,
           s.siteEngineer,
-          s.reassignedTask
+          s.reassignedTask,
+          s.isPullOut ? "Pull Out" : (s.attendanceStatus || "Present")
         ].map(val => {
           const clean = (val || "").replace(/"/g, '""');
           return `"${clean}"`;
@@ -1601,7 +1717,8 @@ app.get("/api/ledger-files/download/:type/:filename", requireAdmin, async (req, 
         csvContent += row + "\n";
       }
 
-      const csvFilename = filename.replace(".json", ".csv");
+      const engSuffix = engineerFilter && engineerFilter !== "ALL" ? `_${engineerFilter.replace(/[^a-zA-Z0-9]/g, "_")}` : "";
+      const csvFilename = filename.replace(".json", `${engSuffix}.csv`);
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${csvFilename}"`);
       return res.send(csvContent);
@@ -1615,6 +1732,8 @@ app.get("/api/ledger-files/download/:type/:filename", requireAdmin, async (req, 
 app.get("/api/ledger-files/view/:type/:filename", requireAdmin, async (req, res) => {
   try {
     const { type, filename } = req.params;
+    const engineerFilter = (req.query.engineer as string || "").trim().toUpperCase();
+
     if (type !== "daily" && type !== "monthly") {
       return res.status(400).json({ error: "Invalid ledger type" });
     }
@@ -1627,7 +1746,14 @@ app.get("/api/ledger-files/view/:type/:filename", requireAdmin, async (req, res)
     }
 
     const content = await fs.readFile(filePath, "utf-8");
-    const records = JSON.parse(content || "[]");
+    let records = JSON.parse(content || "[]");
+
+    if (engineerFilter && engineerFilter !== "ALL") {
+      records = records.filter((s: any) =>
+        s.siteEngineer && s.siteEngineer.trim().toUpperCase() === engineerFilter
+      );
+    }
+
     res.json(records);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
