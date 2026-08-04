@@ -4311,53 +4311,40 @@ export default function App() {
                 </h2>
               </div>
               
-              {/* Form Selection Tabs & Quick Actions */}
-              <div className="flex flex-wrap items-center gap-2">
+              {/* Form Selection Tabs */}
+              <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl">
                 <button
-                  id="quick-view-saved-records-btn"
+                  id="tab-btn-attendance"
                   type="button"
-                  onClick={handleOpenViewSavedLaborsModal}
-                  className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                  title={activeFormTab === "attendance" ? "View All Selected Labors for assigned engineer" : "View All Selected Activities for assigned engineer"}
+                  onClick={() => {
+                    setActiveFormTab("attendance");
+                    setSubmitSuccess(false);
+                    setSubmitError("");
+                  }}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
+                    activeFormTab === "attendance"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
                 >
-                  <Users className="h-3.5 w-3.5 text-indigo-600" />
-                  <span>{activeFormTab === "attendance" ? "View Selected Labors" : "View Selected Activities"}</span>
+                  Labor Attendance
                 </button>
-
-                <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl">
-                  <button
-                    id="tab-btn-attendance"
-                    type="button"
-                    onClick={() => {
-                      setActiveFormTab("attendance");
-                      setSubmitSuccess(false);
-                      setSubmitError("");
-                    }}
-                    className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
-                      activeFormTab === "attendance"
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Labor Attendance
-                  </button>
-                  <button
-                    id="tab-btn-monitoring"
-                    type="button"
-                    onClick={() => {
-                      setActiveFormTab("monitoring");
-                      setSubmitSuccess(false);
-                      setSubmitError("");
-                    }}
-                    className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
-                      activeFormTab === "monitoring"
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    Progress Monitoring
-                  </button>
-                </div>
+                <button
+                  id="tab-btn-monitoring"
+                  type="button"
+                  onClick={() => {
+                    setActiveFormTab("monitoring");
+                    setSubmitSuccess(false);
+                    setSubmitError("");
+                  }}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-150 cursor-pointer ${
+                    activeFormTab === "monitoring"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  Progress Monitoring
+                </button>
               </div>
             </div>
 
