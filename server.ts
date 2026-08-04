@@ -1634,6 +1634,73 @@ app.get("/api/ledger-files/view/:type/:filename", requireAdmin, async (req, res)
   }
 });
 
+// Delete separate daily/monthly ledger file and permanently purge records (Admin only)
+app.delete("/api/ledger-files/:type/:filename", requireAdmin, async (req, res) => {
+  try {
+    const { type, filename } = req.params;
+    if (type !== "daily" && type !== "monthly") {
+      return res.status(400).json({ error: "Invalid ledger type" });
+    }
+
+    const dir = type === "daily" ? "daily" : "monthly";
+    const filePath = path.join(process.cwd(), "ledger_records", dir, filename);
+
+    const submissions = await getSubmissions();
+    const firestoreDb = await getDb();
+
+    let idsToDelete: string[] = [];
+
+    if (type === "daily") {
+      const dateStr = filename.replace("entries_daily_", "").replace(".json", "");
+      idsToDelete = submissions
+        .filter((s: any) => s.date === dateStr || (s.date && s.date.startsWith(dateStr)))
+        .map((s: any) => s.id)
+        .filter(Boolean);
+    } else {
+      const monthStr = filename.replace("entries_monthly_", "").replace(".json", "");
+      idsToDelete = submissions
+        .filter((s: any) => s.date && s.date.startsWith(monthStr))
+        .map((s: any) => s.id)
+        .filter(Boolean);
+    }
+
+    // Delete matching documents from Firestore
+    let firebaseCount = 0;
+    if (firestoreDb && idsToDelete.length > 0) {
+      for (const id of idsToDelete) {
+        try {
+          await deleteDoc(doc(firestoreDb, "submissions", id));
+          firebaseCount++;
+        } catch (err) {
+          console.warn(`Failed to delete submission ${id} from Firestore during file deletion:`, err);
+        }
+      }
+    }
+
+    // Delete matching records from local backup entries.json
+    if (idsToDelete.length > 0) {
+      const remainingSubmissions = submissions.filter((s: any) => !idsToDelete.includes(s.id));
+      await safeWriteSubmissions(remainingSubmissions);
+    }
+
+    // Remove file if exists
+    if (existsSync(filePath)) {
+      await fs.unlink(filePath).catch(() => {});
+    }
+
+    // Synchronize daily and monthly ledger folders
+    await syncSeparateFiles();
+
+    res.json({
+      success: true,
+      deletedCount: idsToDelete.length,
+      firebaseCount
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Export CSV (Admin only)
 app.get("/api/export", requireAdmin, async (req, res) => {
   try {

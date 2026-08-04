@@ -2629,8 +2629,69 @@ export default function App() {
             setSubmissions(prev => prev.filter((s) => s.id !== id));
             showNotification("Success", "Record deleted successfully.", "success");
             fetchLedgerFiles();
+
+            setActiveViewFile(prev => {
+              if (!prev.isOpen) return prev;
+              const updatedRecords = prev.records.filter(r => r.id !== id);
+              return {
+                ...prev,
+                records: updatedRecords,
+              };
+            });
           } else {
             showNotification("Error", "Delete operation failed. Please refresh and try again.", "error");
+          }
+        } catch (err) {
+          showNotification("Network Error", "Could not connect to the database server.", "error");
+        } finally {
+          setConfirmState(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  const handleDeleteLedgerFile = (type: "daily" | "monthly", filename: string, date: string, recordCount: number) => {
+    const formattedDate = (() => {
+      try {
+        if (type === "daily") {
+          const d = new Date(date);
+          return d.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+        } else {
+          const [year, month] = date.split("-");
+          const d = new Date(parseInt(year), parseInt(month) - 1, 1);
+          return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+        }
+      } catch {
+        return date;
+      }
+    })();
+
+    setConfirmState({
+      isOpen: true,
+      title: `Delete ${type === "daily" ? "Daily" : "Monthly"} Ledger File`,
+      message: `Are you sure you want to permanently delete "${filename}" (${recordCount} records)? This will delete all logged activity and attendance entries for ${formattedDate} from the system database permanently.`,
+      confirmText: "Yes, Delete File & Records",
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/ledger-files/${type}/${filename}`, {
+            method: "DELETE",
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            showNotification(
+              "Ledger File Deleted",
+              `Successfully deleted ${filename} and purged ${data.deletedCount || recordCount} matching record(s) from system database.`,
+              "success"
+            );
+            fetchSubmissions();
+            fetchLedgerFiles();
+            if (activeViewFile.isOpen && activeViewFile.filename === filename) {
+              setActiveViewFile(prev => ({ ...prev, isOpen: false }));
+            }
+          } else {
+            const errData = await res.json().catch(() => ({ error: "Delete operation failed" }));
+            showNotification("Error", errData.error || "Delete operation failed.", "error");
           }
         } catch (err) {
           showNotification("Network Error", "Could not connect to the database server.", "error");
@@ -6963,7 +7024,7 @@ export default function App() {
                         <Calendar className="h-5 w-5 text-rose-500" />
                         <div>
                           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Daily Ledger Records</h3>
-                          <p className="text-[10px] text-slate-400 font-mono">Individual files per day (JSON & CSV)</p>
+                          <p className="text-[10px] text-slate-400 font-mono">Individual files per day (CSV & PDF)</p>
                         </div>
                       </div>
                       <span className="text-[10px] font-mono font-bold bg-rose-50 text-rose-600 px-2.5 py-0.5 rounded-full border border-rose-100 uppercase">
@@ -7039,14 +7100,13 @@ export default function App() {
                                 >
                                   <FileSpreadsheet className="h-3 w-3 text-emerald-600" /> CSV
                                 </a>
-                                <a
-                                  href={`${file.path}?format=json`}
-                                  download
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 hover:border-slate-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
-                                  title="Download raw JSON database backup file"
+                                <button
+                                  onClick={() => handleDeleteLedgerFile("daily", file.filename, file.date, file.recordCount)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors shadow-2xs"
+                                  title="Permanently delete this daily record and all its log entries"
                                 >
-                                  <Download className="h-3 w-3 text-slate-500" /> JSON
-                                </a>
+                                  <Trash2 className="h-3 w-3" /> Delete
+                                </button>
                               </div>
                             </div>
                           );
@@ -7062,7 +7122,7 @@ export default function App() {
                         <FileText className="h-5 w-5 text-indigo-500" />
                         <div>
                           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-tight">Monthly Ledger Records</h3>
-                          <p className="text-[10px] text-slate-400 font-mono">Roll-up files per month (JSON & CSV)</p>
+                          <p className="text-[10px] text-slate-400 font-mono">Roll-up files per month (CSV & PDF)</p>
                         </div>
                       </div>
                       <span className="text-[10px] font-mono font-bold bg-indigo-50 text-indigo-600 px-2.5 py-0.5 rounded-full border border-indigo-100 uppercase">
@@ -7137,14 +7197,13 @@ export default function App() {
                                 >
                                   <FileSpreadsheet className="h-3 w-3 text-emerald-600" /> CSV
                                 </a>
-                                <a
-                                  href={`${file.path}?format=json`}
-                                  download
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 hover:border-slate-300 text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors"
-                                  title="Download raw JSON database backup file"
+                                <button
+                                  onClick={() => handleDeleteLedgerFile("monthly", file.filename, file.date, file.recordCount)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg cursor-pointer transition-colors shadow-2xs"
+                                  title="Permanently delete this monthly record and all its log entries"
                                 >
-                                  <Download className="h-3 w-3 text-slate-500" /> JSON
-                                </a>
+                                  <Trash2 className="h-3 w-3" /> Delete
+                                </button>
                               </div>
                             </div>
                           );
@@ -9103,13 +9162,14 @@ export default function App() {
                 >
                   <FileSpreadsheet className="h-3.5 w-3.5" /> Export CSV
                 </a>
-                <a
-                  href={`/api/ledger-files/download/${activeViewFile.type}/${activeViewFile.filename}?format=json`}
-                  download
-                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors"
+                <button
+                  onClick={() => handleDeleteLedgerFile(activeViewFile.type, activeViewFile.filename, activeViewFile.date, activeViewFile.records.length)}
+                  disabled={activeViewFile.isLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer transition-colors border border-rose-800 shadow-sm"
+                  title="Delete entire ledger file and all associated records"
                 >
-                  <Download className="h-3.5 w-3.5" /> Export JSON
-                </a>
+                  <Trash2 className="h-3.5 w-3.5" /> Delete File
+                </button>
                 <button
                   onClick={() => setActiveViewFile(prev => ({ ...prev, isOpen: false }))}
                   className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
@@ -9127,7 +9187,7 @@ export default function App() {
                 <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
                   <RefreshCw className="h-10 w-10 animate-spin text-indigo-500 mb-3" />
                   <span className="font-bold text-slate-700">Fetching records...</span>
-                  <span className="text-xs text-slate-400 mt-1 font-mono">Parsing JSON payload from secure ledger storage...</span>
+                  <span className="text-xs text-slate-400 mt-1 font-mono">Loading records from secure ledger storage...</span>
                 </div>
               ) : activeViewFile.error ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-rose-500 p-6 border border-dashed border-rose-200 rounded-2xl bg-rose-50/50">
@@ -9197,7 +9257,8 @@ export default function App() {
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">LOCATION</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">SITE ENGINEER</th>
                             <th className="py-3 px-4 font-bold border-r border-[#1e293b]">ASSIGNED TASK</th>
-                            <th className="py-3 px-4 font-bold text-center">ATTENDANCE</th>
+                            <th className="py-3 px-4 font-bold text-center border-r border-[#1e293b]">ATTENDANCE</th>
+                            <th className="py-3 px-4 font-bold text-center">ACTION</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs font-medium">
@@ -9218,7 +9279,7 @@ export default function App() {
                             if (filtered.length === 0) {
                               return (
                                 <tr>
-                                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                                  <td className="py-12 text-center text-slate-400" colSpan={9}>
                                     No records found matching your file filter query.
                                   </td>
                                 </tr>
@@ -9240,7 +9301,7 @@ export default function App() {
                                 <td className="py-2.5 px-4 text-slate-600 uppercase leading-relaxed max-w-xs truncate border-r border-slate-100" title={r.reassignedTask}>
                                   {r.reassignedTask}
                                 </td>
-                                <td className="py-2.5 px-4 text-center">
+                                <td className="py-2.5 px-4 text-center border-r border-slate-100">
                                   <div className="flex flex-col items-center justify-center gap-1.5">
                                     <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase whitespace-nowrap inline-block ${
                                       r.isPullOut
@@ -9278,6 +9339,19 @@ export default function App() {
                                       </div>
                                     )}
                                   </div>
+                                </td>
+                                <td className="py-2.5 px-4 text-center">
+                                  {r.id ? (
+                                    <button
+                                      onClick={() => handleDeleteItem(r.id, r.laborsName || r.activityName || "Record")}
+                                      className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                      title="Delete this record permanently"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-300 text-2xs font-mono">-</span>
+                                  )}
                                 </td>
                               </tr>
                             ));
