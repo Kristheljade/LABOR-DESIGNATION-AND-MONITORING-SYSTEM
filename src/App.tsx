@@ -490,12 +490,15 @@ export default function App() {
   const fetchCustomTasks = async () => {
     try {
       const res = await fetch("/api/custom-tasks");
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
-        setCustomTasks(data);
+        if (Array.isArray(data)) {
+          setCustomTasks(data);
+        }
       }
     } catch (err) {
-      console.error("Error fetching custom tasks:", err);
+      // Ignore transient network errors during background updates
     }
   };
 
@@ -860,7 +863,8 @@ export default function App() {
     setLaborCodesError("");
     try {
       const res = await fetch("/api/labor-codes");
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setLaborCodes(data);
       } else {
@@ -878,7 +882,8 @@ export default function App() {
     setProjectCodesError("");
     try {
       const res = await fetch("/api/project-codes");
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setProjectCodes(data);
       } else {
@@ -894,14 +899,14 @@ export default function App() {
   const checkPasscodeStatus = async () => {
     try {
       const res = await fetch("/api/passcode-status");
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setIsPasscodeConfigured(data.configured);
       } else {
         setIsPasscodeConfigured(false);
       }
     } catch (e) {
-      console.error("Failed to check passcode status:", e);
       setIsPasscodeConfigured(false);
     }
   };
@@ -2125,8 +2130,9 @@ export default function App() {
     setLogsError("");
     try {
       const res = await fetch("/api/submissions");
+      const contentType = res.headers.get("content-type");
 
-      if (res.ok) {
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setSubmissions(data);
       } else {
@@ -2143,12 +2149,13 @@ export default function App() {
     setIsLoadingPullOutMonitoring(true);
     try {
       const res = await fetch("/api/pull-out-monitoring");
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setPullOutMonitoringRecords(data);
       }
     } catch (err) {
-      console.error("Error loading pull-out monitoring records:", err);
+      // transient network error
     } finally {
       setIsLoadingPullOutMonitoring(false);
     }
@@ -2239,7 +2246,8 @@ export default function App() {
         ? `/api/ledger-files?engineer=${encodeURIComponent(eng)}`
         : "/api/ledger-files";
       const res = await fetch(url);
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
         setLedgerFiles(data);
       } else {
@@ -2592,15 +2600,16 @@ export default function App() {
         ? `/api/ledger-files/view/${type}/${filename}?engineer=${encodeURIComponent(eng)}`
         : `/api/ledger-files/view/${type}/${filename}`;
       const res = await fetch(url);
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const records = await res.json();
         setActiveViewFile(prev => ({
           ...prev,
-          records,
+          records: Array.isArray(records) ? records : [],
           isLoading: false
         }));
       } else {
-        const errText = await res.text();
+        const errText = await res.text().catch(() => "");
         setActiveViewFile(prev => ({
           ...prev,
           isLoading: false,
@@ -2624,14 +2633,15 @@ export default function App() {
         ? `/api/ledger-files/view/${type}/${filename}?engineer=${encodeURIComponent(eng)}`
         : `/api/ledger-files/view/${type}/${filename}`;
       const res = await fetch(url);
-      if (res.ok) {
+      const contentType = res.headers.get("content-type");
+      if (res.ok && contentType && contentType.includes("application/json")) {
         const records = await res.json();
         const engSuffix = eng && eng !== "ALL" ? ` (${eng})` : "";
         const formattedTitle = type === "daily" 
           ? `DAILY LEDGER RECORDS FOR ${date}${engSuffix}`
           : `MONTHLY LEDGER RECORDS FOR ${date}${engSuffix}`;
         const pdfName = filename.replace(".json", `${eng && eng !== "ALL" ? `_${eng.replace(/[^a-zA-Z0-9]/g, "_")}` : ""}.pdf`);
-        await exportSpecificRecordsToPDF(records, formattedTitle, pdfName);
+        await exportSpecificRecordsToPDF(Array.isArray(records) ? records : [], formattedTitle, pdfName);
         showNotification("Success", `${pdfName} downloaded successfully.`, "success");
       } else {
         showNotification("Error", "Could not fetch records to generate PDF.", "error");
