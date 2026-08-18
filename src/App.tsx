@@ -468,6 +468,7 @@ export default function App() {
   // Pull-Out Portal States
   const [pullOutMonitoringRecords, setPullOutMonitoringRecords] = useState<any[]>([]);
   const [isLoadingPullOutMonitoring, setIsLoadingPullOutMonitoring] = useState<boolean>(false);
+  const [isRefreshingPullOutHub, setIsRefreshingPullOutHub] = useState<boolean>(false);
   const [selectedPullOutDate, setSelectedPullOutDate] = useState<string>(() => {
     try {
       return new Date().toLocaleDateString("en-CA");
@@ -668,6 +669,39 @@ export default function App() {
   const [isLoadingLaborCodes, setIsLoadingLaborCodes] = useState<boolean>(false);
   const [laborCodesError, setLaborCodesError] = useState<string>("");
   const [matchedLaborName, setMatchedLaborName] = useState<string>("");
+
+  // Check if a laborer is already assigned/relocated to any site on a specific date
+  const getLaborAssignmentForDate = (laborCode: string, laborName: string, date: string) => {
+    if (!date || (!laborCode && !laborName)) return null;
+    const nameNorm = (laborName || "").trim().toUpperCase();
+    const codeNorm = (laborCode || "").trim().toUpperCase();
+    
+    return submissions.find(s => {
+      if (s.date !== date || !s.isPullOut || !s.pullOutSite) return false;
+      const subLaborName = (s.laborsName || "").trim().toUpperCase();
+      if (nameNorm && subLaborName && subLaborName === nameNorm) return true;
+      
+      // Also match via master directory code if available
+      const masterList = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+      const matchedMaster = masterList.find(lc => (lc.name || "").trim().toUpperCase() === subLaborName);
+      if (matchedMaster && codeNorm && matchedMaster.code?.trim().toUpperCase() === codeNorm) return true;
+      
+      return false;
+    });
+  };
+
+  // Prevent any already-assigned laborers from remaining selected when date changes or submissions update
+  useEffect(() => {
+    if (selectedLaborIds.length > 0) {
+      const masterList = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
+      setSelectedLaborIds(prev => prev.filter(id => {
+        const labor = masterList.find(lc => lc.id === id || lc.code === id);
+        if (!labor) return true;
+        const assigned = getLaborAssignmentForDate(labor.code, labor.name, selectedPullOutDate);
+        return !assigned;
+      }));
+    }
+  }, [selectedPullOutDate, submissions, laborCodes]);
 
   // New labor code inputs
   const [newLaborCode, setNewLaborCode] = useState("");
@@ -1510,7 +1544,21 @@ export default function App() {
       const matchedProject = masterProjectCodes.find(pc => pc.code.toUpperCase() === destinationSite.toUpperCase().trim() || pc.name.toUpperCase() === destinationSite.toUpperCase().trim());
       const siteLocation = matchedProject ? matchedProject.location || matchedProject.name : destinationSite;
 
-      const promises = selectedLaborIds.map(async (laborId) => {
+      // Filter out any laborers that already have an active assignment on this date to another site
+      const validLaborIdsToAssign = selectedLaborIds.filter(laborId => {
+        const labor = masterLaborCodes.find(lc => lc.id === laborId || lc.code === laborId);
+        if (!labor) return false;
+        const alreadyAssigned = getLaborAssignmentForDate(labor.code, labor.name, selectedPullOutDate);
+        return !alreadyAssigned;
+      });
+
+      if (validLaborIdsToAssign.length === 0) {
+        showNotification("Warning", "All selected laborer(s) are already assigned to a site on this date.", "error");
+        setIsSavingPullOuts(false);
+        return;
+      }
+
+      const promises = validLaborIdsToAssign.map(async (laborId) => {
         const labor = masterLaborCodes.find(lc => lc.id === laborId || lc.code === laborId);
         if (!labor) return;
 
@@ -1711,6 +1759,10 @@ export default function App() {
         shouldForceSyncRef.current = true;
         // Refresh records list
         await fetchPullOutMonitoring();
+        showNotification("Attendance Verified", `Relocation attendance for site "${selectedPullOutSite}" verified and saved.`, "success");
+        // Automatically redirect back to Attendance Verification Portal view
+        setSelectedPullOutSite("");
+        setPullOutWorkerStatus({});
         setTimeout(() => setPullOutSaveSuccess(false), 3000);
       } else {
         const errData = await res.json();
@@ -2161,6 +2213,25 @@ export default function App() {
     }
   };
 
+  const handleRefreshPullOutData = async () => {
+    setIsRefreshingPullOutHub(true);
+    try {
+      await Promise.all([
+        fetchSubmissions(),
+        fetchPullOutMonitoring(),
+        fetchLaborCodes(),
+        fetchProjectCodes(),
+        fetchLedgerFiles(),
+        fetchCustomTasks()
+      ]);
+      showNotification("Data Refreshed", "Pull-Out Hub records, attendance data, and project codes updated.", "success");
+    } catch (error) {
+      showNotification("Error", "Failed to complete full data refresh.", "error");
+    } finally {
+      setIsRefreshingPullOutHub(false);
+    }
+  };
+
   const getProjectAndSiteForVerification = (siteName: string) => {
     if (!siteName) return "";
     const masterProjects = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
@@ -2169,6 +2240,31 @@ export default function App() {
       return `${match.code} - ${match.name} (${match.location || 'N/A'})`;
     }
     return siteName.toUpperCase();
+  };
+
+  const getShortProjectAndSiteName = (siteName: string, maxLen: number = 38): string => {
+    if (!siteName) return "";
+    const masterProjects = projectCodes.length > 0 ? projectCodes : DEFAULT_PROJECT_CODES;
+    const match = masterProjects.find(p => p.code.toUpperCase() === siteName.toUpperCase().trim() || p.name.toUpperCase() === siteName.toUpperCase().trim());
+    if (match) {
+      const code = match.code;
+      let rawName = match.name || "";
+      if (rawName.toUpperCase().startsWith(code.toUpperCase())) {
+        rawName = rawName.substring(code.length).replace(/^[\s\-:]+/, "").trim();
+      }
+      let concise = rawName;
+      if (concise.length > 28) {
+        concise = concise.substring(0, 25).trim() + "...";
+      }
+      const combined = `${code} - ${concise}`;
+      return combined.length > maxLen ? combined.substring(0, maxLen - 3).trim() + "..." : combined;
+    }
+    
+    let clean = siteName.toUpperCase().trim();
+    if (clean.length > maxLen) {
+      return clean.substring(0, maxLen - 3).trim() + "...";
+    }
+    return clean;
   };
 
   const formatTimeTo12Hour = (timeStr: string): string => {
@@ -5129,30 +5225,46 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Sub tabs to toggle between Select Labors Hub and Attendance Verification */}
-              <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200/50 self-start sm:self-center">
+              {/* Action Controls & Sub Tabs */}
+              <div className="flex items-center gap-2.5 self-start sm:self-center flex-wrap">
+                {/* Refresh Pull-Out Data Button */}
                 <button
+                  id="pullout-refresh-data-btn"
                   type="button"
-                  onClick={() => setActivePullOutSection("select_labors")}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    activePullOutSection === "select_labors"
-                      ? "bg-[#0F172A] text-white shadow-sm"
-                      : "text-slate-500 hover:text-slate-800"
-                  }`}
+                  onClick={handleRefreshPullOutData}
+                  disabled={isRefreshingPullOutHub || isLoadingLogs || isLoadingPullOutMonitoring}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 hover:border-slate-300 active:scale-95 text-xs font-bold uppercase tracking-wider text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 rounded-xl cursor-pointer transition-all shadow-3xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Refresh Pull-Out Hub data, relocations, and master directories"
                 >
-                  <Users className="h-3.5 w-3.5" /> Select Labors Hub
+                  <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingPullOutHub || isLoadingLogs || isLoadingPullOutMonitoring ? "animate-spin text-indigo-600" : "text-slate-500"}`} />
+                  <span>{isRefreshingPullOutHub ? "Refreshing..." : "Refresh"}</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePullOutSection("verification")}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    activePullOutSection === "verification"
-                      ? "bg-[#0F172A] text-white shadow-sm"
-                      : "text-slate-500 hover:text-slate-800"
-                  }`}
-                >
-                  <ClipboardCheck className="h-3.5 w-3.5" /> Attendance Verification
-                </button>
+
+                {/* Sub tabs to toggle between Select Labors Hub and Attendance Verification */}
+                <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200/50">
+                  <button
+                    type="button"
+                    onClick={() => setActivePullOutSection("select_labors")}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                      activePullOutSection === "select_labors"
+                        ? "bg-[#0F172A] text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    <Users className="h-3.5 w-3.5" /> Select Labors Hub
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivePullOutSection("verification")}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                      activePullOutSection === "verification"
+                        ? "bg-[#0F172A] text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    <ClipboardCheck className="h-3.5 w-3.5" /> Attendance Verification
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -5368,38 +5480,49 @@ export default function App() {
                         lc.name.toLowerCase().includes(laborSearchQuery.toLowerCase()) || 
                         lc.code.toLowerCase().includes(laborSearchQuery.toLowerCase())
                       );
-                      const filteredIds = filtered.map(lc => lc.id || lc.code);
-                      const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedLaborIds.includes(id));
+                      
+                      // Identify available (unassigned on selected date) filtered list
+                      const availableFiltered = filtered.filter(lc => {
+                        const isAssigned = Boolean(getLaborAssignmentForDate(lc.code, lc.name, selectedPullOutDate));
+                        return !isAssigned;
+                      });
+                      const availableFilteredIds = availableFiltered.map(lc => lc.id || lc.code);
+                      const allAvailableSelected = availableFilteredIds.length > 0 && availableFilteredIds.every(id => selectedLaborIds.includes(id));
 
                       return (
                         <div className="flex items-center gap-3">
                           <button
                             type="button"
+                            disabled={availableFilteredIds.length === 0}
                             onClick={() => {
-                              if (allFilteredSelected) {
-                                setSelectedLaborIds(prev => prev.filter(id => !filteredIds.includes(id)));
+                              if (allAvailableSelected) {
+                                setSelectedLaborIds(prev => prev.filter(id => !availableFilteredIds.includes(id)));
                               } else {
-                                setSelectedLaborIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+                                setSelectedLaborIds(prev => Array.from(new Set([...prev, ...availableFilteredIds])));
                               }
                             }}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:text-slate-800 cursor-pointer shadow-2xs"
+                            className={`inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:text-slate-800 shadow-2xs ${
+                              availableFilteredIds.length === 0 ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                            }`}
+                            title={availableFilteredIds.length === 0 ? "No available unassigned laborers in current search" : "Select all unassigned laborers"}
                           >
                             <input
                               type="checkbox"
-                              checked={allFilteredSelected}
+                              checked={allAvailableSelected && availableFilteredIds.length > 0}
+                              disabled={availableFilteredIds.length === 0}
                               readOnly
                               className="h-3 w-3 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 pointer-events-none"
                             />
-                            Select All Filtered
+                            Select All Available
                           </button>
                           
                           {selectedLaborIds.length > 0 && (
                             <button
                               type="button"
                               onClick={() => setSelectedLaborIds([])}
-                              className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase tracking-wider"
+                              className="text-[9px] font-bold text-rose-500 hover:text-rose-600 uppercase tracking-wider cursor-pointer"
                             >
-                              Clear Selection
+                              Clear Selection ({selectedLaborIds.length})
                             </button>
                           )}
                         </div>
@@ -5436,39 +5559,77 @@ export default function App() {
                         return filtered.map((lc) => {
                           const id = lc.id || lc.code;
                           const isSelected = selectedLaborIds.includes(id);
+                          const assignedSub = getLaborAssignmentForDate(lc.code, lc.name, selectedPullOutDate);
+                          const isAlreadyAssigned = Boolean(assignedSub);
+                          const assignedSite = assignedSub?.pullOutSite || "";
 
                           return (
                             <div
                               key={id}
                               onClick={() => {
+                                if (isAlreadyAssigned) return; // Prevent selection of already assigned labor
                                 setSelectedLaborIds(prev => 
                                   prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
                                 );
                               }}
-                              className={`px-4 py-3 grid grid-cols-12 gap-4 items-center transition-all cursor-pointer hover:bg-slate-50/70 ${
-                                isSelected ? "bg-indigo-50/20" : ""
+                              className={`px-4 py-3 grid grid-cols-12 gap-4 items-center transition-all ${
+                                isAlreadyAssigned
+                                  ? "bg-rose-50/30 border-l-2 border-l-rose-500 cursor-not-allowed select-none"
+                                  : isSelected
+                                    ? "bg-indigo-50/20 cursor-pointer hover:bg-indigo-50/30"
+                                    : "cursor-pointer hover:bg-slate-50/70"
                               }`}
+                              title={isAlreadyAssigned ? `Already assigned to site "${assignedSite}" on ${selectedPullOutDate}` : undefined}
                             >
                               <div className="col-span-1 flex justify-center">
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={() => {}} // Handled by outer click
-                                  className="h-3.5 w-3.5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 pointer-events-none"
-                                />
+                                {isAlreadyAssigned ? (
+                                  <div 
+                                    className="h-4 w-4 rounded border border-rose-300 bg-rose-50 flex items-center justify-center cursor-not-allowed shadow-3xs"
+                                    title={`Already assigned to ${assignedSite}`}
+                                  >
+                                    <X className="h-3.5 w-3.5 text-rose-600 stroke-[3]" />
+                                  </div>
+                                ) : (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => {}} // Handled by outer click
+                                    className="h-3.5 w-3.5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 pointer-events-none"
+                                  />
+                                )}
                               </div>
                               <div className="col-span-2">
-                                <span className="text-[10px] font-black font-mono bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-700">
+                                <span className={`text-[10px] font-black font-mono px-2 py-0.5 rounded border ${
+                                  isAlreadyAssigned
+                                    ? "bg-rose-100/70 border-rose-200 text-rose-700"
+                                    : "bg-slate-100 border-slate-200 text-slate-700"
+                                }`}>
                                   {lc.code}
                                 </span>
                               </div>
-                              <div className="col-span-6">
-                                <span className="text-xs font-bold text-slate-800 uppercase tracking-tight block truncate font-sans">
-                                  {lc.name}
-                                </span>
+                              <div className="col-span-6 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={`text-xs uppercase tracking-tight block truncate font-sans ${
+                                    isAlreadyAssigned 
+                                      ? "text-red-600 font-extrabold" 
+                                      : "text-slate-800 font-bold"
+                                  }`}>
+                                    {lc.name}
+                                  </span>
+                                  {isAlreadyAssigned && (
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-bold font-mono text-rose-700 bg-rose-50 border border-rose-200/80 px-2 py-0.5 rounded-md">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                                      Assigned: {assignedSite}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <div className="col-span-3">
-                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight bg-slate-100/50 px-2.5 py-1 rounded-full border border-slate-200/40 inline-block">
+                                <span className={`text-[10px] font-bold uppercase tracking-tight px-2.5 py-1 rounded-full border inline-block ${
+                                  isAlreadyAssigned
+                                    ? "bg-rose-50 text-rose-600 border-rose-200/60"
+                                    : "text-slate-500 bg-slate-100/50 border-slate-200/40"
+                                }`}>
                                   {lc.designation || "HELPER"}
                                 </span>
                               </div>
@@ -5587,7 +5748,7 @@ export default function App() {
                 </div>
 
                 {/* Right Workspace: Verification Intake Table */}
-                <div className="lg:col-span-8 bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm min-h-[400px]">
+                <div className="lg:col-span-8 bg-white rounded-3xl p-4 sm:p-6 border border-slate-200/60 shadow-sm min-h-[400px]">
                   {!selectedPullOutSite ? (
                     <div className="h-full flex flex-col items-center justify-center text-center py-16 text-slate-400 space-y-3">
                       <div className="p-4 bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100">
@@ -5603,33 +5764,36 @@ export default function App() {
                   ) : (
                     <div className="space-y-6">
                       {/* Active Site Title Banner */}
-                      <div className="bg-slate-50 border border-slate-200/60 rounded-2.5xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fade-in">
-                        <div className="space-y-0.5">
-                          <span className="text-[10px] font-black tracking-widest uppercase font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-full inline-block mb-1.5">
+                      <div className="bg-slate-50 border border-slate-200/70 rounded-2.5xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fade-in">
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <span className="text-[10px] font-black tracking-widest uppercase font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-full inline-block">
                             Active Destination Audit
                           </span>
-                          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
-                            <MapPin className="h-4 w-4 text-rose-500" /> {getProjectAndSiteForVerification(selectedPullOutSite)}
+                          <h4 className="text-sm sm:text-base font-bold text-slate-900 uppercase tracking-tight flex items-start gap-2 break-words">
+                            <MapPin className="h-4 w-4 text-rose-500 shrink-0 mt-0.5" />
+                            <span className="min-w-0 flex-1 leading-snug">{getProjectAndSiteForVerification(selectedPullOutSite)}</span>
                           </h4>
-                          <p className="text-[10px] text-slate-500 font-mono">
-                            Verifying relocated labor for <strong className="text-slate-700 font-semibold font-sans">{selectedPullOutDate}</strong>
+                          <p className="text-[10px] text-slate-500 font-mono flex items-center gap-1.5 pt-0.5">
+                            <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span>Verifying relocated labor for <strong className="text-slate-700 font-semibold font-sans">{selectedPullOutDate}</strong></span>
                           </p>
                         </div>
 
                         {pullOutMonitoringRecords.some(r => r.date === selectedPullOutDate && r.site.toUpperCase().trim() === selectedPullOutSite.toUpperCase().trim()) && (
-                          <div className="self-start sm:self-center inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-mono font-bold uppercase rounded-full border border-emerald-100 shadow-3xs animate-fade-in">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> RECORD VERIFIED &amp; SAVED
+                          <div className="self-start sm:self-center shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-mono font-bold uppercase rounded-full border border-emerald-200/80 shadow-3xs animate-fade-in">
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                            <span>RECORD VERIFIED &amp; SAVED</span>
                           </div>
                         )}
                       </div>
 
                       {/* Workers Attendance Rows */}
                       <div className="space-y-3">
-                        <div className="hidden sm:grid sm:grid-cols-12 gap-4 px-4 py-2 text-[10px] font-black uppercase text-slate-400 tracking-wider border-b border-slate-100">
+                        <div className="hidden lg:grid lg:grid-cols-12 gap-3 px-4 py-2 text-[10px] font-black uppercase text-slate-400 tracking-wider border-b border-slate-100 items-center">
                           <span className="col-span-1 text-center">S.No</span>
-                          <span className="col-span-5">Labor Code &amp; Name</span>
-                          <span className="col-span-3 text-center">Intake Status</span>
-                          <span className="col-span-3 text-center">Verification Timings</span>
+                          <span className="col-span-4 xl:col-span-5">Labor Code &amp; Name</span>
+                          <span className="col-span-3 xl:col-span-3 text-center">Intake Status</span>
+                          <span className="col-span-4 xl:col-span-4 text-center">Verification Timings</span>
                         </div>
 
                         <div className="space-y-3">
@@ -5653,52 +5817,56 @@ export default function App() {
                               return (
                                 <div
                                   key={key}
-                                  className={`p-4 rounded-2xl border transition-all flex flex-col sm:grid sm:grid-cols-12 items-center gap-4 ${
+                                  className={`p-3.5 sm:p-4 rounded-2xl border transition-all flex flex-col lg:grid lg:grid-cols-12 items-stretch lg:items-center gap-3.5 lg:gap-3 ${
                                     isPresent
-                                      ? "bg-white border-slate-200 hover:border-slate-300"
-                                      : "bg-slate-50/50 border-slate-200/60 opacity-75"
+                                      ? "bg-white border-slate-200 hover:border-slate-300 hover:shadow-3xs"
+                                      : "bg-slate-50/70 border-slate-200/80"
                                   }`}
                                 >
                                   {/* S.No */}
-                                  <div className="col-span-1 text-center hidden sm:block">
-                                    <span className="text-[11px] font-mono font-bold text-slate-400">{index + 1}</span>
-                                  </div>
-
-                                  {/* Code & Name */}
-                                  <div className="col-span-5 w-full min-w-0 text-center sm:text-left">
-                                    <div className="flex flex-col sm:flex-row sm:items-baseline gap-1.5">
-                                      <span className="text-[10px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md inline-block">
-                                        {(() => {
-                                          const masterCodes = laborCodes.length > 0 ? laborCodes : DEFAULT_LABOR_CODES;
-                                          const matched = masterCodes.find(lc => (lc.name || "").toUpperCase().trim() === (w.laborsName || "").toUpperCase().trim());
-                                          return matched ? matched.code : (w.laborCode || "N/A");
-                                        })()}
-                                      </span>
-                                      <span className="text-xs font-bold text-slate-800 uppercase tracking-tight block truncate font-sans">
-                                        {w.laborsName}
-                                      </span>
-                                    </div>
-                                    <span className="text-[9px] font-mono text-slate-400 mt-1 block uppercase truncate">
-                                      Relocated at {formatTimeTo12Hour(w.pullOutTime || "08:00 AM")} • Reason: {w.pullOutReason || "NOT SPECIFIED"}
+                                  <div className="col-span-1 text-center hidden lg:flex items-center justify-center">
+                                    <span className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center text-[11px] font-mono font-bold">
+                                      {index + 1}
                                     </span>
                                   </div>
 
+                                  {/* Code & Name */}
+                                  <div className="col-span-4 xl:col-span-5 w-full min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                                      <span className="lg:hidden w-5 h-5 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center text-[10px] font-mono font-bold shrink-0">
+                                        {index + 1}
+                                      </span>
+                                      <span className="text-[10px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md shrink-0">
+                                        {resolvedCode}
+                                      </span>
+                                      <span className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-tight truncate flex-1 min-w-0" title={w.laborsName}>
+                                        {w.laborsName}
+                                      </span>
+                                    </div>
+                                    <div className="text-[9.5px] font-mono text-slate-400 mt-1 flex items-center gap-1.5 flex-wrap">
+                                      <span>RELOCATED AT <strong className="text-slate-600 font-semibold">{formatTimeTo12Hour(w.pullOutTime || "08:00 AM")}</strong></span>
+                                      <span className="text-slate-300">•</span>
+                                      <span className="truncate max-w-[240px]">REASON: <strong className="text-slate-600 font-semibold">{w.pullOutReason || "NOT SPECIFIED"}</strong></span>
+                                    </div>
+                                  </div>
+
                                   {/* Status Selector */}
-                                  <div className="col-span-3 w-full flex justify-center">
-                                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/50 w-full max-w-[200px]">
+                                  <div className="col-span-3 xl:col-span-3 w-full flex justify-center">
+                                    <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200/70 w-full max-w-[210px]">
                                       <button
                                         type="button"
                                         onClick={() => setPullOutWorkerStatus(prev => ({
                                           ...prev,
                                           [key]: { ...statusData, status: "Present" }
                                         }))}
-                                        className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer text-center ${
+                                        className={`py-1.5 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer text-center flex items-center justify-center gap-1 ${
                                           isPresent
                                             ? "bg-emerald-600 text-white shadow-2xs"
-                                            : "text-slate-600 hover:text-slate-900"
+                                            : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
                                         }`}
                                       >
-                                        Present
+                                        {isPresent && <Check className="w-3 h-3 shrink-0" />}
+                                        <span>Present</span>
                                       </button>
                                       <button
                                         type="button"
@@ -5706,23 +5874,24 @@ export default function App() {
                                           ...prev,
                                           [key]: { ...statusData, status: "Not Present" }
                                         }))}
-                                        className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer text-center ${
+                                        className={`py-1.5 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer text-center flex items-center justify-center gap-1 ${
                                           !isPresent
                                             ? "bg-rose-600 text-white shadow-2xs"
-                                            : "text-slate-600 hover:text-slate-900"
+                                            : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
                                         }`}
                                       >
-                                        Absent
+                                        {!isPresent && <X className="w-3 h-3 shrink-0" />}
+                                        <span>Absent</span>
                                       </button>
                                     </div>
                                   </div>
 
                                   {/* Timings */}
-                                  <div className="col-span-3 w-full flex items-center justify-center gap-2">
+                                  <div className="col-span-4 xl:col-span-4 w-full flex items-center justify-center">
                                     {isPresent ? (
-                                      <div className="flex items-center gap-1.5 animate-fade-in w-full max-w-[180px]">
-                                        <div className="flex flex-col flex-1">
-                                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 text-center">In</span>
+                                      <div className="flex items-center justify-center gap-1.5 w-full max-w-[230px]">
+                                        <div className="flex-1 flex flex-col items-center min-w-0">
+                                          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">In</span>
                                           <input
                                             type="time"
                                             value={formatTimeTo24Hour(statusData.timeIn)}
@@ -5730,12 +5899,12 @@ export default function App() {
                                               ...prev,
                                               [key]: { ...statusData, timeIn: formatTimeTo12Hour(e.target.value) }
                                             }))}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-1.5 focus:outline-none focus:border-indigo-500 text-[11px] font-bold font-mono text-center text-slate-800 transition-all"
+                                            className="w-full bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-lg py-1 px-1.5 text-[11px] font-bold font-mono text-center text-slate-800 focus:outline-none transition-all shadow-2xs"
                                           />
                                         </div>
-                                        <span className="text-slate-300 font-bold mt-2">:</span>
-                                        <div className="flex flex-col flex-1">
-                                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 text-center">Out</span>
+                                        <span className="text-slate-300 font-bold text-sm mt-3 shrink-0">:</span>
+                                        <div className="flex-1 flex flex-col items-center min-w-0">
+                                          <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Out</span>
                                           <input
                                             type="time"
                                             value={formatTimeTo24Hour(statusData.timeOut)}
@@ -5743,14 +5912,17 @@ export default function App() {
                                               ...prev,
                                               [key]: { ...statusData, timeOut: formatTimeTo12Hour(e.target.value) }
                                             }))}
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-1.5 focus:outline-none focus:border-indigo-500 text-[11px] font-bold font-mono text-center text-slate-800 transition-all"
+                                            className="w-full bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-lg py-1 px-1.5 text-[11px] font-bold font-mono text-center text-slate-800 focus:outline-none transition-all shadow-2xs"
                                           />
                                         </div>
                                       </div>
                                     ) : (
-                                      <span className="text-[10px] text-slate-400 font-mono font-medium tracking-wider uppercase bg-slate-100 border border-slate-200/60 px-3 py-1.5 rounded-xl w-full text-center">
-                                        ⚠️ NOT ON SITE
-                                      </span>
+                                      <div className="w-full max-w-[210px] text-center">
+                                        <span className="inline-flex items-center justify-center gap-1.5 text-[10px] text-rose-700 bg-rose-50 border border-rose-200/70 font-mono font-bold tracking-wider uppercase px-3 py-1.5 rounded-xl w-full">
+                                          <AlertCircle className="w-3 h-3 text-rose-500 shrink-0" />
+                                          NOT ON SITE
+                                        </span>
+                                      </div>
                                     )}
                                   </div>
                                 </div>
@@ -5776,31 +5948,36 @@ export default function App() {
                       )}
 
                       {/* Action Commit Button */}
-                      <div className="pt-4 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5 text-xs text-slate-700 font-bold uppercase tracking-wider">
-                            <MapPin className="h-3.5 w-3.5 text-rose-500 shrink-0" />
-                            <span>Site Location: <span className="text-indigo-600 font-black">{getProjectAndSiteForVerification(selectedPullOutSite)}</span></span>
+                      <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-start gap-1.5 text-xs text-slate-700 font-bold uppercase tracking-tight">
+                            <MapPin className="h-4 w-4 text-rose-500 shrink-0 mt-0.5" />
+                            <div className="min-w-0 flex-1">
+                              <span className="text-slate-500 font-medium">Site Location: </span>
+                              <span className="text-indigo-600 font-black break-words">
+                                {getProjectAndSiteForVerification(selectedPullOutSite)}
+                              </span>
+                            </div>
                           </div>
-                          <span className="text-[9.5px] text-slate-400 font-mono hidden md:inline-block">
+                          <p className="text-[9.5px] text-slate-400 font-mono pl-5">
                             Saved logs instantly populate the dynamic reports and CSV separate databases.
-                          </span>
+                          </p>
                         </div>
                         <button
                           type="button"
                           onClick={handleSavePullOutMonitoring}
                           disabled={isSavingPullOutRecord}
-                          className="w-full md:w-auto inline-flex items-center justify-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md shadow-indigo-100 hover:shadow-indigo-200/60 cursor-pointer transition-all shrink-0 font-sans"
+                          className="w-full sm:w-auto self-stretch sm:self-center inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] disabled:bg-slate-300 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-md shadow-indigo-200 hover:shadow-indigo-300/60 cursor-pointer transition-all shrink-0 font-sans"
                         >
                           {isSavingPullOutRecord ? (
                             <>
-                              <RefreshCw className="h-4 w-4 animate-spin" />
-                              COMMITTING...
+                              <RefreshCw className="h-4 w-4 animate-spin shrink-0" />
+                              <span>COMMITTING...</span>
                             </>
                           ) : (
                             <>
-                              <ClipboardCheck className="h-4 w-4" />
-                              VERIFY &amp; SAVE REPORT
+                              <ClipboardCheck className="h-4 w-4 shrink-0" />
+                              <span>VERIFY &amp; SAVE REPORT</span>
                             </>
                           )}
                         </button>
@@ -5829,14 +6006,16 @@ export default function App() {
                       <select
                         value={reportSelectedSite}
                         onChange={(e) => setReportSelectedSite(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-bold text-slate-800 uppercase"
+                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 text-xs font-bold text-slate-800 uppercase truncate max-w-full"
                       >
                         <option value="">-- SELECT SITE --</option>
                         {Array.from(new Set([
                           ...submissions.filter(s => s.isPullOut && s.pullOutSite).map(s => s.pullOutSite),
                           ...pullOutMonitoringRecords.map(r => r.site)
                         ].map(s => s.toUpperCase().trim()))).filter(Boolean).map(site => (
-                          <option key={site} value={site}>{getProjectAndSiteForVerification(site)}</option>
+                          <option key={site} value={site} title={getProjectAndSiteForVerification(site)}>
+                            {getShortProjectAndSiteName(site, 45)}
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -6041,10 +6220,10 @@ export default function App() {
                               ));
 
                               return (
-                                <div key={site} className="bg-white border border-slate-200/80 rounded-2.5xl p-5 hover:border-slate-300 transition-all flex flex-col justify-between gap-4 group">
-                                  <div className="space-y-3">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="space-y-1">
+                                <div key={site} className="bg-white border border-slate-200/80 rounded-2.5xl p-5 hover:border-slate-300 transition-all flex flex-col justify-between gap-4 group min-w-0 overflow-hidden shadow-2xs">
+                                  <div className="space-y-3 min-w-0">
+                                    <div className="flex items-start justify-between gap-2 min-w-0">
+                                      <div className="space-y-1 min-w-0 flex-1 overflow-hidden">
                                         <div className="flex flex-wrap gap-1 items-center">
                                           {associatedProjects.map(proj => (
                                             <span key={proj as string} className="text-[9px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-150 px-2 py-0.5 rounded-md uppercase">
@@ -6057,8 +6236,11 @@ export default function App() {
                                             </span>
                                           )}
                                         </div>
-                                        <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight block truncate font-sans group-hover:text-indigo-600 transition-colors">
-                                          {getProjectAndSiteForVerification(site)}
+                                        <h5 
+                                          className="text-xs font-black text-slate-800 uppercase tracking-tight truncate font-sans group-hover:text-indigo-600 transition-colors"
+                                          title={getProjectAndSiteForVerification(site)}
+                                        >
+                                          {getShortProjectAndSiteName(site, 38)}
                                         </h5>
                                       </div>
                                       <div className="flex items-center gap-1.5 shrink-0">
@@ -6175,17 +6357,20 @@ export default function App() {
                               ].filter(Boolean)));
 
                               return (
-                                <div key={proj.code} className="bg-white border border-slate-200/80 rounded-2.5xl p-5 hover:border-slate-300 transition-all flex flex-col justify-between gap-4 group">
-                                  <div className="space-y-3">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="space-y-1">
+                                <div key={proj.code} className="bg-white border border-slate-200/80 rounded-2.5xl p-5 hover:border-slate-300 transition-all flex flex-col justify-between gap-4 group min-w-0 overflow-hidden shadow-2xs">
+                                  <div className="space-y-3 min-w-0">
+                                    <div className="flex items-start justify-between gap-2 min-w-0">
+                                      <div className="space-y-1 min-w-0 flex-1 overflow-hidden">
                                         <span className="text-[9px] font-black font-mono bg-indigo-50 text-indigo-700 border border-indigo-150 px-2.5 py-0.5 rounded-full uppercase">
                                           CODE {proj.code}
                                         </span>
-                                        <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight block truncate font-sans group-hover:text-indigo-600 transition-colors">
-                                          {proj.name}
+                                        <h5 
+                                          className="text-xs font-black text-slate-800 uppercase tracking-tight truncate font-sans group-hover:text-indigo-600 transition-colors"
+                                          title={`${proj.code} - ${proj.name}`}
+                                        >
+                                          {proj.name.length > 36 ? `${proj.name.substring(0, 33).trim()}...` : proj.name}
                                         </h5>
-                                        <span className="text-[9.5px] font-mono text-slate-400 block truncate">
+                                        <span className="text-[9.5px] font-mono text-slate-400 block truncate" title={proj.location}>
                                           Location: {proj.location}
                                         </span>
                                       </div>
@@ -6302,7 +6487,12 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-200/60 text-xs">
                       <div>
                         <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Target Project Site</span>
-                        <strong className="text-slate-800 uppercase font-bold text-[11px] block mt-0.5">{getProjectAndSiteForVerification(reportSelectedSite)}</strong>
+                        <strong 
+                          className="text-slate-800 uppercase font-bold text-[11px] block mt-0.5 truncate max-w-[220px]"
+                          title={getProjectAndSiteForVerification(reportSelectedSite)}
+                        >
+                          {getShortProjectAndSiteName(reportSelectedSite, 38)}
+                        </strong>
                       </div>
                       <div>
                         <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Generated For</span>
